@@ -1,130 +1,85 @@
-# Attendly v2.0
+# Attendly
 
-> Smart attendance management system for modern classrooms.
+Attendance management for classrooms. Teachers run the register, students watch their own attendance.
+Built by Sachin Kumar ([@sachinkrcodes](https://github.com/sachinkrcodes)).
 
-**Built by [Sachin](https://instagram.com/nyxsachin) — [@nyxsachin](https://instagram.com/nyxsachin)**
+## What it does
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://attendance-system-codeswithsachin.vercel.app)
-[![GitHub](https://img.shields.io/badge/GitHub-codeswithsachin-181717?style=for-the-badge&logo=github)](https://github.com/codeswithsachin/Attendance-system)
+**Teacher**
+- Create classes. Each class gets a 6-character join code.
+- Take attendance: Present, Late, Absent, Leave. Saving again for the same day updates it.
+- Dashboard: attendance level, 14-day trend, 30-day mix, 10-week heat map, students below your minimum.
+- Class reports with CSV download and print.
+- Sample class with 12 fictional students and five weeks of history, for demos.
 
----
+**Student**
+- Sign up, then join a class with the code.
+- Attendance level for every class, warnings when below the teacher's minimum, full history with filters.
 
-## What is Attendly?
+**Rules**
+- Present and Late count as attended. Leave is excused and not counted in the percentage.
+- Rate = attended / (attended + absent).
 
-Attendly is a fully client-side attendance management system built with vanilla HTML, CSS and JavaScript. No backend, no database, no dependencies. All data lives in the browser's localStorage.
+## How it is built
 
-It has two portals — a **Teacher portal** for managing classes, students and registers, and a **Student portal** for viewing personal attendance history.
-
----
-
-## Features
-
-### Teacher portal
-- **Daily attendance register** — mark Present, Absent, Late or Leave per student
-- **Live stats** — today's rate, present count, absent count, total students, day streak
-- **Trend badge** — shows +/- change vs previous register
-- **Analytics** — SVG smooth line chart, stacked bar chart, donut chart, 70-day heatmap, ranked performance list
-- **Class health** — on track / needs watch / at-risk / no records breakdown
-- **At-risk alerts** — notification panel flags students below your set threshold
-- **Streak tracker** — counts consecutive days with a register
-- **Edit students and classes** — full CRUD via modal
-- **CSV exports** — full report, monthly summary, at-risk list
-- **JSON backup** — download and restore all data
-- **Print register** — formatted printable page
-- **Dark mode** — persisted, togglable from sidebar or topbar
-- **Demo data** — 15 students, 3 classes, 21 days of realistic attendance in one click
-
-### Student portal
-- Personal attendance overview with animated score ring
-- Confetti on 80%+ attendance
-- Full attendance history with search/filter
-- Enrolled classes view
-
-### UI/UX
-- Glassmorphism login card with animated glow orbs
-- Particle canvas background
-- Spring-animated stat cards
-- Gradient text headline
-- Hero banner with rotating ring decoration
-- Per-student avatar colors
-- Fully responsive — works on desktop, tablet and mobile
-- Accessible — keyboard nav, ARIA labels, focus rings
-
----
-
-## Demo credentials
-
-| Role    | Email                      | Password    |
-|---------|----------------------------|-------------|
-| Teacher | teacher@attendly.com       | teacher123  |
-| Student | (name)@student.com         | student123  |
-
-After logging in as teacher, go to **Settings > Load Demo** to populate with sample data.
-
----
-
-## Tech stack
-
-| Layer      | Technology                        |
-|------------|-----------------------------------|
-| Markup     | HTML5 (semantic)                  |
-| Styling    | CSS3 (custom properties, grid, flexbox, animations) |
-| Logic      | Vanilla JavaScript (ES2022)       |
-| Charts     | Canvas API + inline SVG           |
-| Storage    | localStorage                      |
-| Fonts      | Inter + Plus Jakarta Sans (Google Fonts) |
-| Deployment | Vercel (static)                   |
-
-Zero dependencies. Zero frameworks. Zero build step.
-
----
-
-## Project structure
+| Part | Technology |
+|---|---|
+| Front end | HTML, CSS, JavaScript (no framework). Liquid-glass design, light and dark mode |
+| API | Node.js serverless functions (`api/[...path].js`, logic in `lib/routes.js`) |
+| Database | PostgreSQL on Neon in production, SQLite file for local runs |
+| Auth | Passwords hashed with scrypt, signed tokens (HMAC-SHA256, 7 days), role checks on every route |
+| Hosting | Vercel |
 
 ```
-Attendance-system/
-  index.html    - app shell, all pages and modals
-  style.css     - full design system (tokens, components, dark mode, responsive)
-  script.js     - all app logic, charts, exports, demo data
-  vercel.json   - deployment and security headers config
-  README.md     - this file
+public/        index.html, style.css, app.js   (the website)
+api/           [...path].js                     (one function handles /api/*)
+lib/           routes.js, db.js, auth.js        (API logic, database, login security)
+test/          api.test.js                      (27 end-to-end checks)
+dev.js         local server
 ```
 
----
+### Database tables
+`users` (teacher or student) · `classes` · `enrollments` (student in class) · `attendance` (class, student, date, status)
 
-## Run locally
+### API (all under /api, JSON, Bearer token)
+| Method | Path | Who |
+|---|---|---|
+| POST | /auth/register, /auth/login | anyone |
+| GET, PATCH | /me | signed in |
+| GET, POST | /classes | teacher: own classes / create. student: joined classes |
+| POST | /classes/join | student |
+| DELETE | /classes/:id, /classes/:id/students/:sid | teacher |
+| DELETE | /classes/:id/leave | student |
+| GET | /classes/:id/roster?date= | teacher |
+| PUT | /classes/:id/attendance | teacher |
+| GET | /dashboard, /reports/:classId | teacher |
+| GET | /student/summary | student |
+| POST | /demo | teacher |
+| GET | /health | anyone |
 
-Just open `index.html` in any modern browser. No server needed.
+## Run it on your computer
 
-Or use VS Code Live Server:
-1. Install the **Live Server** extension
-2. Right-click `index.html` > **Open with Live Server**
+Needs Node.js 22 or newer.
 
----
+```
+node dev.js
+```
+Open http://localhost:3000. Data is saved in `.data/attendly.db`. Run the tests with `node test/api.test.js`.
 
-## Deploy to Vercel
+## Put it live on Vercel
 
-1. Fork or clone this repo
-2. Go to [vercel.com](https://vercel.com) and import the repo
-3. Vercel auto-detects it as a static site
-4. Deploy — done
+1. Push this folder to GitHub (repo root = this folder).
+2. Vercel > Add New > Project > import the repo. Framework Preset: **Other**. Root Directory: `./`. Deploy.
+3. In the Vercel project open **Storage**, create a **Neon (Postgres)** database and connect it to the project.
+   Vercel adds the `DATABASE_URL` variable for you. The tables are created automatically on the first request.
+4. Settings > Environment Variables: add `AUTH_SECRET` with a long random value. Make one with:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+5. Deployments > Redeploy. Open `https://YOUR-SITE.vercel.app/api/health`. You should see `{"ok":true}`.
 
-The `vercel.json` handles routing and security headers automatically.
+If you skip step 4 the app still works, but set it so login tokens depend on a secret only you know.
 
----
+## Notes for the viewer
 
-## Screenshots
-
-| Login | Dashboard | Analytics |
-|-------|-----------|-----------|
-| Glassmorphism card with animated glow | Hero banner, stat cards, charts | SVG line chart, donut, heatmap |
-
----
-
-## License
-
-MIT — free to use, modify and share.
-
----
-
-Built with care by **[Sachin](https://instagram.com/nyxsachin)** — follow on Instagram [@nyxsachin](https://instagram.com/nyxsachin)
+- Sample students use `@demo.attendly` emails and cannot sign in.
+- Passwords need 8+ characters. Too many wrong sign-ins from one address are blocked for 10 minutes.
+- Do not commit `.env` files or database URLs to GitHub.

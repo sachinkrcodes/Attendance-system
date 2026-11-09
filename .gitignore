@@ -1,4 +1,6 @@
-﻿out/
-*.class
-.idea/
-.vscode/
+node_modules/
+.data/
+.env
+.env.local
+.vercel/
+*.log

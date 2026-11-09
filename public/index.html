@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Attendly: take attendance in under a minute. Teacher and student portals with live reports.">
+  <meta name="theme-color" content="#0b8a8f">
+  <title>Attendly</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%230b8a8f'/%3E%3Cpath d='M8 36c8-8 16 8 24 0s16 8 24 0v20H8z' fill='%23fff' fill-opacity='.85'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="goo" x="-20%" y="-60%" width="140%" height="220%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="b"/>
+        <feColorMatrix in="b" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/>
+      </filter>
+    </defs>
+  </svg>
+
+  <div class="sea" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>
+
+  <div id="app"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
+  <div id="modal-root"></div>
+
+  <noscript><p style="padding:2rem">Attendly needs JavaScript. Turn it on and reload.</p></noscript>
+  <script src="app.js"></script>
+</body>
+</html>
