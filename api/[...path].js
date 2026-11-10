@@ -28,7 +28,10 @@ module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   try {
     const url = new URL(req.url, 'http://localhost');
-    const segs = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    // Vercel rewrite sends /api/<anything> to /api/index?p=<anything>
+    let pathname = url.pathname;
+    if (url.searchParams.has('p')) { pathname = '/api/' + url.searchParams.get('p'); url.searchParams.delete('p'); }
+    const segs = pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').split(',')[0].trim();
     const out = await handle({
       method: req.method,
