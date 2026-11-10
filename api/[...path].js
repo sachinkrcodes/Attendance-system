@@ -44,6 +44,6 @@ module.exports = async function handler(req, res) {
     const known = e instanceof HttpError;
     if (!known) console.error(e);
     res.statusCode = known ? e.status : 500;
-    res.end(JSON.stringify({ error: known ? e.message : 'Something went wrong on the server. Try again in a moment.' }));
+    res.end(JSON.stringify({ error: known ? e.message : 'Something went wrong on the server. Try again in a moment.', ...(known ? e.extra : {}) }));
   }
 };

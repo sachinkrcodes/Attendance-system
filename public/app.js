@@ -11,15 +11,27 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 const todayStr = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 const initials = (n) => String(n || '?').trim().split(/\s+/).map((x) => x[0]).join('').slice(0, 2).toUpperCase();
-const HUES = ['#0b8a8f', '#7c6cf2', '#e0663a', '#2a8f5a', '#c2418f', '#3a6fd8', '#b0832a'];
-const hueFor = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return HUES[h % HUES.length]; };
-const avatar = (name) => `<span class="avatar" style="background:${hueFor(name)}" aria-hidden="true">${esc(initials(name))}</span>`;
+const avatar = (name) => `<span class="avatar" aria-hidden="true">${esc(initials(name))}</span>`;
 const band = (r, min = 75) => (r === null || r === undefined ? 'none' : r >= min ? 'good' : r >= min - 15 ? 'warn' : 'bad');
-const chip = (r, min) => `<span class="chip ${band(r, min)}">${r === null || r === undefined ? 'No data' : r + '%'}</span>`;
+const chip = (r, min) => {
+  const b = band(r, min);
+  if (b === 'none') return '<span class="chip none">No data</span>';
+  return b === 'bad' ? `<span class="chip bad"><span>▲ ${r}%</span></span>` : `<span class="chip ${b}">${r}%</span>`;
+};
+// Four statuses, told apart by symbol and shape, not by colour.
 const STATUS = [['present', 'Present'], ['late', 'Late'], ['absent', 'Absent'], ['leave', 'Leave']];
+const sym = (k) => `<i class="dot ${k}" aria-hidden="true"></i>`;
+const statusChip = (s) => {
+  const [, label] = STATUS.find((x) => x[0] === s) || [s, s];
+  const cls = s === 'present' ? 'good' : s === 'late' ? 'warn' : s === 'absent' ? 'bad' : 's-leave';
+  return s === 'absent' ? `<span class="chip bad"><span>${sym(s)}${label}</span></span>` : `<span class="chip ${cls}">${sym(s)}${label}</span>`;
+};
+const maskEmail = (e) => { const [u, d] = String(e).split('@'); return (u[0] || '') + '•••' + (u.length > 1 ? u.slice(-1) : '') + '@' + (d || ''); };
 
 const ICONS = {
   home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
@@ -28,18 +40,19 @@ const ICONS = {
   reports: '<path d="M5 20V10M12 20V4M19 20v-7"/>',
   settings: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
   history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  requests: '<path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 004 0"/>',
+  checkin: '<circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v4M15 12v3"/>',
   moon: '<path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
   out: '<path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="3"/><path d="M5 15V6a2 2 0 012-2h9"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
-const DROP = '<svg class="drop" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="dg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#12b7a5"/><stop offset="1" stop-color="#0b8a8f"/></linearGradient></defs><circle cx="32" cy="32" r="30" fill="url(#dg)"/><path d="M8 36c8-8 16 8 24 0s16 8 24 0v20H8z" fill="#fff" fill-opacity=".85"/></svg>';
+const DROP = '<svg class="drop" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="var(--ink)"/><path d="M8 36c8-8 16 8 24 0s16 8 24 0v20H8z" fill="var(--bg)" fill-opacity=".9"/></svg>';
 
 // ---------- state and API ----------
 let user = null;
 let token = store.get('attendly_token');
-let toastTimer = null;
 
 async function api(method, path, body) {
   let res;
@@ -55,13 +68,13 @@ async function api(method, path, body) {
   let data = {};
   try { data = await res.json(); } catch { /* empty body */ }
   if (res.status === 401 && token && !path.startsWith('/auth/')) { signOut(true); throw new Error(data.error || 'Please sign in again.'); }
-  if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ').');
+  if (!res.ok) { const e = new Error(data.error || 'Request failed (' + res.status + ').'); e.data = data; throw e; }
   return data;
 }
 
 function toast(msg, isErr) {
   const el = document.createElement('div');
-  el.className = 'toast glass' + (isErr ? ' err' : '');
+  el.className = 'toast' + (isErr ? ' err' : '');
   el.textContent = msg;
   $('#toasts').appendChild(el);
   setTimeout(() => el.remove(), isErr ? 5000 : 2800);
@@ -72,40 +85,42 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   store.set('attendly_theme', t);
   const m = $('meta[name="theme-color"]');
-  if (m) m.content = t === 'dark' ? '#061019' : '#0b8a8f';
+  if (m) m.content = t === 'dark' ? '#1A2B3C' : '#F7FAFC';
   const b = $('#themeBtn');
   if (b) { b.innerHTML = icon(t === 'dark' ? 'sun' : 'moon'); b.setAttribute('aria-label', t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'); }
 }
 applyTheme(store.get('attendly_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 
 // ---------- the orb: attendance as water level ----------
-function orb(pct, label, max) {
+function orb(pct, label, min) {
   const empty = pct === null || pct === undefined;
   const p = empty ? 0 : Math.max(0, Math.min(100, pct));
-  const y = 200 - (p / 100) * 188;           // water surface height inside a 200-unit circle
-  const tone = empty ? 'none' : band(pct, max || 75);
-  const col = { good: ['#4fe3c0', '#0b8a8f'], warn: ['#ffd27a', '#e58f00'], bad: ['#ff9d92', '#e03e30'], none: ['#cfe8e5', '#9fc9c6'] }[tone];
+  const y = 200 - (p / 100) * 188;
+  const tone = empty ? 'none' : band(pct, min || 75);
   const id = 'o' + Math.random().toString(36).slice(2, 7);
   const wave = 'M0 10q25-12 50 0t50 0t50 0t50 0t50 0t50 0t50 0t50 0V230H0z';
+  const fill = tone === 'bad' ? `url(#${id}h)` : `url(#${id}g)`;
+  const top = tone === 'warn' ? 0.5 : 0.78;
+  const onWater = tone === 'good' && p >= 52;
   return `<div class="orb ${empty ? 'empty' : ''}" role="img" aria-label="${empty ? 'No attendance recorded yet' : pct + ' percent attendance'}">
     <svg viewBox="0 0 200 200">
       <defs>
         <clipPath id="${id}c"><circle cx="100" cy="100" r="96"/></clipPath>
-        <linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col[0]}"/><stop offset="1" stop-color="${col[1]}"/></linearGradient>
-        <radialGradient id="${id}s" cx=".32" cy=".24" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".75"/><stop offset=".35" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+        <linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--ink)" stop-opacity="${top}"/><stop offset="1" stop-color="var(--ink)" stop-opacity="${tone === 'warn' ? 0.75 : 1}"/></linearGradient>
+        <pattern id="${id}h" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="var(--ink)" fill-opacity=".16"/><rect width="2.4" height="7" fill="var(--ink)"/></pattern>
+        <radialGradient id="${id}s" cx=".32" cy=".24" r=".8"><stop offset="0" stop-color="var(--bg)" stop-opacity=".7"/><stop offset=".4" stop-color="var(--bg)" stop-opacity=".12"/><stop offset="1" stop-color="var(--bg)" stop-opacity="0"/></radialGradient>
       </defs>
-      <circle cx="100" cy="100" r="96" fill="var(--glass)" />
+      <circle cx="100" cy="100" r="96" fill="var(--glass)"/>
       <g clip-path="url(#${id}c)">
         <g class="orb-level" style="transform:translateY(${y}px)">
-          <g class="wave-b" opacity=".55"><path d="${wave}" fill="url(#${id}g)" transform="translate(0 -6)"/></g>
-          <g class="wave-a"><path d="${wave}" fill="url(#${id}g)"/></g>
+          <g class="wave-b" opacity=".5"><path d="${wave}" fill="${fill}" transform="translate(0 -6)"/></g>
+          <g class="wave-a"><path d="${wave}" fill="${fill}"/></g>
         </g>
         <ellipse cx="72" cy="44" rx="46" ry="22" fill="url(#${id}s)" transform="rotate(-24 72 44)"/>
       </g>
-      <circle cx="100" cy="100" r="96" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="2"/>
-      <circle cx="100" cy="100" r="93" fill="none" stroke="rgba(8,48,58,.12)" stroke-width="1.5"/>
+      <circle cx="100" cy="100" r="96" fill="none" stroke="var(--ink)" stroke-width="2"/>
     </svg>
-    <div class="orb-num"><b>${empty ? '--' : p + '%'}</b><span>${esc(label)}</span></div>
+    <div class="orb-num ${onWater ? 'on-water' : ''}"><b>${empty ? '--' : p + '%'}</b><span>${esc(label)}</span></div>
   </div>`;
 }
 
@@ -124,54 +139,75 @@ function trendChart(points) {
   const area = `${d} L${x(pts.length - 1)} ${H - B} L${x(0)} ${H - B}Z`;
   const grid = [0, 50, 100].map((v) => `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('');
   const labels = pts.map((p, i) => (i % Math.ceil(pts.length / 6) === 0 || i === pts.length - 1) ? `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${fmtShort(p.date)}</text>` : '').join('');
-  const dots = pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.rate)}" r="4" fill="var(--tide)" stroke="#fff" stroke-width="2"><title>${fmtDate(p.date)}: ${p.rate}%</title></circle>`).join('');
+  const dots = pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.rate)}" r="4.5" fill="var(--ink)" stroke="var(--bg)" stroke-width="2"><title>${fmtDate(p.date)}: ${p.rate}%</title></circle>`).join('');
   return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Attendance rate over the last ${pts.length} recorded days">
-    <defs><linearGradient id="ta" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--tide)" stop-opacity=".35"/><stop offset="1" stop-color="var(--tide)" stop-opacity="0"/></linearGradient></defs>
-    ${grid}<path d="${area}" fill="url(#ta)"/><path class="draw" d="${d}" fill="none" stroke="var(--tide)" stroke-width="3.5" stroke-linecap="round"/>${dots}${labels}</svg></div>`;
+    <defs><linearGradient id="ta" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--ink)" stop-opacity=".22"/><stop offset="1" stop-color="var(--ink)" stop-opacity="0"/></linearGradient></defs>
+    ${grid}<path d="${area}" fill="url(#ta)"/><path class="draw" d="${d}" fill="none" stroke="var(--ink)" stroke-width="3.5" stroke-linecap="round"/>${dots}${labels}</svg></div>`;
 }
 
 function donut(mix) {
   const total = STATUS.reduce((t, [k]) => t + (mix[k] || 0), 0);
   if (!total) return `<div class="empty"><p>No records in the last 30 days.</p></div>`;
-  const colors = { present: 'var(--mint)', late: 'var(--sun)', absent: 'var(--coral)', leave: 'var(--lilac)' };
+  const paint = { present: 'var(--ink)', late: 'color-mix(in srgb, var(--ink) 55%, transparent)', leave: 'color-mix(in srgb, var(--ink) 22%, transparent)', absent: 'url(#hd)' };
   const r = 52, c = 2 * Math.PI * r;
   let off = 0;
   const arcs = STATUS.map(([k]) => {
     const len = (mix[k] / total) * c;
-    const s = `<circle cx="70" cy="70" r="${r}" fill="none" stroke="${colors[k]}" stroke-width="18" stroke-dasharray="${Math.max(len - 2, 0)} ${c}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"/>`;
+    const s = `<circle cx="70" cy="70" r="${r}" fill="none" stroke="${paint[k]}" stroke-width="18" stroke-dasharray="${Math.max(len - 2, 0)} ${c}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"/>`;
     off += len; return mix[k] ? s : '';
   }).join('');
   const legend = STATUS.map(([k, n]) => `<div><span class="dot ${k}"></span>${n}<b>${mix[k]}</b></div>`).join('');
-  return `<div class="donut-wrap"><svg viewBox="0 0 140 140" role="img" aria-label="Attendance mix">${arcs}<text x="70" y="76" text-anchor="middle" style="font:800 22px var(--display);fill:var(--ink)">${total}</text></svg><div class="legend">${legend}</div></div>`;
+  return `<div class="donut-wrap"><svg viewBox="0 0 140 140" role="img" aria-label="Attendance mix"><defs><pattern id="hd" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="currentColor" fill-opacity=".1"/><rect width="2" height="5" fill="currentColor"/></pattern></defs>${arcs}<text x="70" y="76" text-anchor="middle" style="font:800 22px var(--display);fill:var(--ink)">${total}</text></svg><div class="legend">${legend}</div></div>`;
 }
 
 function heatmap(days) {
   const map = Object.fromEntries(days.map((d) => [d.date, d.rate]));
   const cells = [];
-  const end = new Date(todayStr() + 'T00:00:00');
-  const start = new Date(end); start.setDate(start.getDate() - 69);
-  while (start.getDay() !== 0) start.setDate(start.getDate() - 1);
-  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const key = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-    const v = map[key];
-    const bg = v === undefined || v === null ? '' : `background:color-mix(in srgb, var(--tide) ${Math.max(18, v)}%, transparent)`;
-    cells.push(`<i style="${bg}" title="${fmtDate(key)}${v == null ? ': no register' : ': ' + v + '%'}"></i>`);
+  const end = todayStr();
+  let start = addDays(end, -69);
+  while (new Date(start + 'T00:00:00').getDay() !== 0) start = addDays(start, -1);
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    const v = map[d];
+    const bg = v === undefined || v === null ? '' : `background:color-mix(in srgb, var(--ink) ${Math.max(14, v)}%, transparent)`;
+    cells.push(`<i style="${bg}" title="${fmtDate(d)}${v == null ? ': no register' : ': ' + v + '%'}"></i>`);
   }
   return `<div class="heat chart" role="img" aria-label="Attendance heat map for the last 10 weeks">${cells.join('')}</div>`;
 }
 
+// What a student can still miss, or must attend, to stay at or above the minimum.
+function planner(s, min) {
+  const a = s.present + s.late, t = a + s.absent;
+  if (!t) return 'No attendance recorded yet.';
+  const rate = (a / t) * 100;
+  if (rate >= min) {
+    const can = Math.floor((a * 100) / min - t + 1e-9);
+    return can > 0 ? `You can miss <b>${can}</b> more class${can === 1 ? '' : 'es'} and stay at ${min}%.` : `You are right at ${min}%. Do not miss the next class.`;
+  }
+  if (min >= 100) return 'Attend every class from now on to recover.';
+  const need = Math.ceil((min * t - 100 * a) / (100 - min) - 1e-9);
+  return `Attend the next <b>${need}</b> class${need === 1 ? '' : 'es'} in a row to get back to ${min}%.`;
+}
+
 // ---------- modal ----------
+let modalCleanup = null;
+let modalPrev = null;
+function closeModal() {
+  if (modalCleanup) { modalCleanup(); modalCleanup = null; }
+  $('#modal-root').innerHTML = '';
+  document.removeEventListener('keydown', onModalKey);
+  if (modalPrev && modalPrev.focus) modalPrev.focus();
+}
+function onModalKey(e) { if (e.key === 'Escape') closeModal(); }
 function openModal(html, onMount) {
+  closeModal();
   const root = $('#modal-root');
-  const prev = document.activeElement;
+  modalPrev = document.activeElement;
   root.innerHTML = `<div class="scrim" data-close-modal><div class="modal glass" role="dialog" aria-modal="true">${html}</div></div>`;
-  const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', esc_); prev && prev.focus && prev.focus(); };
-  const esc_ = (e) => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', esc_);
-  $('.scrim', root).addEventListener('mousedown', (e) => { if (e.target.dataset.closeModal !== undefined) close(); });
-  $$('[data-cancel]', root).forEach((b) => b.addEventListener('click', close));
-  const first = $('input, button.btn', root); first && first.focus();
-  onMount && onMount(root, close);
+  document.addEventListener('keydown', onModalKey);
+  $('.scrim', root).addEventListener('mousedown', (e) => { if (e.target.dataset.closeModal !== undefined) closeModal(); });
+  $$('[data-cancel]', root).forEach((b) => b.addEventListener('click', closeModal));
+  const first = $('input, textarea, select, button.btn', root); first && first.focus();
+  onMount && onMount(root, closeModal, (fn) => { modalCleanup = fn; });
 }
 function confirmBox(title, text, yes, onYes) {
   openModal(`<h2>${esc(title)}</h2><p class="sub">${esc(text)}</p><div class="actions"><button class="btn soft" data-cancel>Cancel</button><button class="btn danger" id="yes">${esc(yes)}</button></div>`, (root, close) => {
@@ -179,82 +215,199 @@ function confirmBox(title, text, yes, onYes) {
   });
 }
 
-// ---------- auth screen ----------
-function showAuth() {
-  user = null;
-  $('#app').innerHTML = `
-  <main class="auth">
-    <section class="auth-hero">
-      <div class="brand">${DROP}Attendly</div>
-      <h1>Take attendance in under a minute.</h1>
-      <p>Teachers run the register. Students watch their percentage rise and fall like water.</p>
-      <div class="auth-orb">${orb(86, 'attendance')}<p class="sub">Every class gets a live level. Drop below your teacher's minimum and it turns coral.</p></div>
-    </section>
-    <section class="auth-card glass" aria-label="Sign in or create an account">
-      <div class="tabs" role="tablist">
-        <button role="tab" id="tabIn" aria-selected="true">Sign in</button>
-        <button role="tab" id="tabUp" aria-selected="false">Create account</button>
-      </div>
-      <form id="authForm" novalidate>
-        <div id="roleBox" class="field hidden">
-          <label id="roleLbl">I am a</label>
-          <div class="roles" role="radiogroup" aria-labelledby="roleLbl">
-            <label class="role"><input type="radio" name="role" value="teacher" checked><span>Teacher</span></label>
-            <label class="role"><input type="radio" name="role" value="student"><span>Student</span></label>
-          </div>
-        </div>
-        <div id="nameBox" class="field hidden"><label for="fName">Full name</label><input id="fName" type="text" autocomplete="name" maxlength="60"></div>
-        <div class="field"><label for="fEmail">Email</label><input id="fEmail" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="fPass">Password</label><input id="fPass" type="password" autocomplete="current-password" required minlength="8"><p class="hint hidden" id="passHint">At least 8 characters.</p></div>
-        <p class="error" id="authErr" role="alert"></p>
-        <button class="btn wide" id="authBtn" type="submit">Sign in</button>
-      </form>
-      <p class="auth-foot">Your register is stored securely and only your teacher and you can see it.</p>
-    </section>
-  </main>`;
-  let mode = 'in';
-  const set = (m) => {
-    mode = m;
-    $('#tabIn').setAttribute('aria-selected', m === 'in');
-    $('#tabUp').setAttribute('aria-selected', m === 'up');
-    $('#roleBox').classList.toggle('hidden', m === 'in');
-    $('#nameBox').classList.toggle('hidden', m === 'in');
-    $('#passHint').classList.toggle('hidden', m === 'in');
-    $('#authBtn').textContent = m === 'in' ? 'Sign in' : 'Create account';
-    $('#fPass').autocomplete = m === 'in' ? 'current-password' : 'new-password';
-    $('#authErr').textContent = '';
-  };
-  $('#tabIn').onclick = () => set('in');
-  $('#tabUp').onclick = () => set('up');
-  $('#authForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = $('#authBtn'), err = $('#authErr');
-    err.textContent = '';
-    const email = $('#fEmail').value.trim(), password = $('#fPass').value;
-    if (!email || !password) { err.textContent = 'Enter your email and password.'; return; }
-    btn.disabled = true;
-    try {
-      const body = mode === 'in' ? { email, password } : { email, password, name: $('#fName').value, role: $('input[name="role"]:checked').value };
-      const out = await api('POST', mode === 'in' ? '/auth/login' : '/auth/register', body);
-      token = out.token; store.set('attendly_token', token); user = out.user;
-      startApp();
-    } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+// ---------- password field and strength meter ----------
+const strength = (pw) => (pw.length >= 8) + (pw.length >= 12) + (/[a-z]/.test(pw) && /[A-Z]/.test(pw) && /\d/.test(pw)) + /[^A-Za-z0-9]/.test(pw);
+const pwField = (id, label, auto, meter) => `<div class="field"><label for="${id}">${label}</label>
+  <div class="pw"><input id="${id}" type="password" autocomplete="${auto}" maxlength="100"><button type="button" data-show="${id}" aria-label="Show password">Show</button></div>
+  ${meter ? `<div class="strength" id="${id}M" aria-live="polite">${'<i></i>'.repeat(4)}<span></span></div><p class="hint">8+ characters with a letter and a number. Longer is stronger.</p>` : ''}</div>`;
+function bindPw(root) {
+  $$('[data-show]', root).forEach((b) => (b.onclick = () => {
+    const i = $('#' + b.dataset.show, root); const show = i.type === 'password';
+    i.type = show ? 'text' : 'password'; b.textContent = show ? 'Hide' : 'Show';
+  }));
+  $$('.strength', root).forEach((m) => {
+    const input = $('#' + m.id.slice(0, -1), root);
+    input.addEventListener('input', () => {
+      const s = strength(input.value);
+      $$('i', m).forEach((el, i) => el.classList.toggle('on', i < s));
+      $('span', m).textContent = input.value ? ['Weak', 'Weak', 'Okay', 'Good', 'Strong'][s] : '';
+    });
   });
+}
+function pwProblem(pw) {
+  if (pw.length < 8) return 'Password needs at least 8 characters.';
+  if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) return 'Password needs at least one letter and one number.';
+  return '';
+}
+
+// ---------- auth screens ----------
+let authTimer = null;
+function showAuth(mode = 'in', data = {}) {
+  user = null;
+  closeModal();
+  if (!$('#authCard')) {
+    $('#app').innerHTML = `
+    <main class="auth">
+      <section class="auth-hero">
+        <div class="brand">${DROP}Attendly</div>
+        <h1>Take attendance in under a minute.</h1>
+        <p class="lead">Teachers run the register. Students watch their percentage rise and fall like water.</p>
+        <div class="auth-orb">${orb(86, 'attendance')}<p class="sub">Every class gets a live level. Drop under your teacher's minimum and the water turns to stripes.</p></div>
+      </section>
+      <section class="auth-card glass" id="authCard" aria-label="Account"></section>
+    </main>`;
+  }
+  authCard(mode, data);
+}
+
+function authCard(mode, d) {
+  clearInterval(authTimer);
+  const card = $('#authCard');
+  const tabs = (m) => `<div class="tabs" role="tablist"><button role="tab" id="tabIn" aria-selected="${m === 'in'}">Sign in</button><button role="tab" id="tabUp" aria-selected="${m === 'up'}">Create account</button></div>`;
+  const demo = (code) => (code ? `<p class="demo-note">Demo mode is on, so the code is shown here: <b>${esc(code)}</b></p>` : '');
+
+  if (mode === 'in') {
+    card.innerHTML = `${tabs('in')}<form id="f" novalidate>
+      <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" value="${esc(d.email || '')}"></div>
+      ${pwField('pass', 'Password', 'current-password')}
+      <div class="between"><span></span><button type="button" class="link" id="forgot">Forgot password?</button></div>
+      <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Sign in</button></form>
+      <p class="auth-foot">New here? Create an account. We confirm your email with a code.</p>`;
+    $('#tabUp').onclick = () => authCard('up', {});
+    $('#forgot').onclick = () => authCard('forgot', { email: $('#email').value.trim() });
+    bindPw(card);
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $('#err'), btn = $('#go'); err.textContent = '';
+      const email = $('#email').value.trim(), password = $('#pass').value;
+      if (!email || !password) { err.textContent = 'Enter your email and password.'; return; }
+      btn.disabled = true;
+      try { finishLogin(await api('POST', '/auth/login', { email, password })); }
+      catch (ex) {
+        if (ex.data && ex.data.needsVerify) return authCard('verify', { email: ex.data.email, devOtp: ex.data.devOtp });
+        err.textContent = ex.message; btn.disabled = false;
+      }
+    };
+  }
+
+  if (mode === 'up') {
+    card.innerHTML = `${tabs('up')}<form id="f" novalidate>
+      <div class="field"><label id="rl">I am a</label><div class="roles" role="radiogroup" aria-labelledby="rl">
+        <label class="role"><input type="radio" name="role" value="teacher" checked><span>Teacher</span></label>
+        <label class="role"><input type="radio" name="role" value="student"><span>Student</span></label></div></div>
+      <div class="field"><label for="name">Full name</label><input id="name" type="text" autocomplete="name" maxlength="60"></div>
+      <div class="row2">
+        <div class="field"><label for="phone">Mobile number</label><input id="phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="16" placeholder="98765 43210"></div>
+        <div class="field hidden" id="rollBox"><label for="roll">Roll number</label><input id="roll" type="text" maxlength="30" placeholder="Optional"></div>
+      </div>
+      <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email"><p class="hint">We send a 6-digit code to this address.</p></div>
+      ${pwField('pass', 'Password', 'new-password', true)}
+      <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Send verification code</button></form>`;
+    $('#tabIn').onclick = () => authCard('in', {});
+    bindPw(card);
+    $$('input[name="role"]', card).forEach((r) => (r.onchange = () => $('#rollBox').classList.toggle('hidden', r.value !== 'student' || !r.checked)));
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $('#err'), btn = $('#go'); err.textContent = '';
+      const body = { role: $('input[name="role"]:checked').value, name: $('#name').value, phone: $('#phone').value, rollNo: $('#roll').value, email: $('#email').value.trim(), password: $('#pass').value };
+      if (body.name.trim().length < 2) { err.textContent = 'Enter your full name.'; return; }
+      if (!/^\+?\d{10,14}$/.test(body.phone.replace(/[\s\-()]/g, ''))) { err.textContent = 'Enter a valid mobile number, 10 to 14 digits.'; return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email)) { err.textContent = 'Enter a valid email address.'; return; }
+      const pp = pwProblem(body.password); if (pp) { err.textContent = pp; return; }
+      btn.disabled = true;
+      try { const o = await api('POST', '/auth/register', body); authCard('verify', { email: o.email, devOtp: o.devOtp, fresh: true }); }
+      catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    };
+  }
+
+  if (mode === 'verify') {
+    card.innerHTML = `<h2>Check your email</h2><p class="sub">We sent a 6-digit code to <b>${esc(maskEmail(d.email))}</b>. It works for 10 minutes.</p>
+      <form id="f" novalidate style="margin-top:18px">${demo(d.devOtp)}
+      <div class="field"><label for="code" class="sr-only" style="position:absolute;left:-9999px">Verification code</label><input id="code" class="otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></div>
+      <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Verify and continue</button>
+      <div class="between" style="margin-top:14px"><button type="button" class="link" id="resend" disabled>Send again</button><button type="button" class="link" id="back">Use another email</button></div></form>`;
+    $('#code').focus();
+    const rs = $('#resend'); let left = 60;
+    const tick = () => { rs.disabled = left > 0; rs.textContent = left > 0 ? `Send again in ${left}s` : 'Send again'; left--; };
+    tick(); authTimer = setInterval(() => { if (left < -1) clearInterval(authTimer); tick(); }, 1000);
+    rs.onclick = async () => {
+      try { const o = await api('POST', '/auth/resend', { email: d.email, purpose: 'verify' }); toast('New code sent.'); authCard('verify', { email: d.email, devOtp: o.devOtp }); }
+      catch (ex) { toast(ex.message, true); }
+    };
+    $('#back').onclick = () => authCard('up', {});
+    $('#code').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); };
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $('#err'), btn = $('#go'); err.textContent = '';
+      if ($('#code').value.length !== 6) { err.textContent = 'Type the 6-digit code from the email.'; return; }
+      btn.disabled = true;
+      try { finishLogin(await api('POST', '/auth/verify', { email: d.email, code: $('#code').value })); toast('Email verified. Welcome to Attendly.'); }
+      catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    };
+  }
+
+  if (mode === 'forgot') {
+    card.innerHTML = `<h2>Forgot your password?</h2><p class="sub">Type your email. If an account exists, we send a code to reset it.</p>
+      <form id="f" novalidate style="margin-top:18px"><div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" value="${esc(d.email || '')}"></div>
+      <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Send reset code</button>
+      <div class="between" style="margin-top:14px"><button type="button" class="link" id="back">Back to sign in</button><span></span></div></form>`;
+    $('#back').onclick = () => authCard('in', { email: $('#email').value.trim() });
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $('#err'), btn = $('#go'); err.textContent = '';
+      const email = $('#email').value.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err.textContent = 'Enter a valid email address.'; return; }
+      btn.disabled = true;
+      try { const o = await api('POST', '/auth/forgot', { email }); authCard('reset', { email, devOtp: o.devOtp }); }
+      catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    };
+  }
+
+  if (mode === 'reset') {
+    card.innerHTML = `<h2>Set a new password</h2><p class="sub">If <b>${esc(maskEmail(d.email))}</b> has an account, a code is on its way. Type it with your new password.</p>
+      <form id="f" novalidate style="margin-top:18px">${demo(d.devOtp)}
+      <div class="field"><label for="code">6-digit code</label><input id="code" class="otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></div>
+      ${pwField('pass', 'New password', 'new-password', true)}
+      <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Change password</button>
+      <div class="between" style="margin-top:14px"><button type="button" class="link" id="resend" disabled>Send again</button><button type="button" class="link" id="back">Back to sign in</button></div></form>`;
+    bindPw(card);
+    const rs = $('#resend'); let left = 60;
+    const tick = () => { rs.disabled = left > 0; rs.textContent = left > 0 ? `Send again in ${left}s` : 'Send again'; left--; };
+    tick(); authTimer = setInterval(() => { if (left < -1) clearInterval(authTimer); tick(); }, 1000);
+    rs.onclick = async () => { try { const o = await api('POST', '/auth/resend', { email: d.email, purpose: 'reset' }); toast('If the account exists, a new code was sent.'); authCard('reset', { email: d.email, devOtp: o.devOtp }); } catch (ex) { toast(ex.message, true); } };
+    $('#back').onclick = () => authCard('in', { email: d.email });
+    $('#code').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); };
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $('#err'), btn = $('#go'); err.textContent = '';
+      if ($('#code').value.length !== 6) { err.textContent = 'Type the 6-digit code from the email.'; return; }
+      const pp = pwProblem($('#pass').value); if (pp) { err.textContent = pp; return; }
+      btn.disabled = true;
+      try { await api('POST', '/auth/reset', { email: d.email, code: $('#code').value, password: $('#pass').value }); toast('Password changed. Sign in with the new one.'); authCard('in', { email: d.email }); }
+      catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    };
+  }
+}
+
+function finishLogin(out) {
+  token = out.token; store.set('attendly_token', token); user = out.user;
+  startApp();
 }
 
 function signOut(silent) {
   token = null; store.del('attendly_token'); user = null;
-  showAuth();
+  showAuth('in');
   if (!silent) toast('Signed out.');
 }
 
 // ---------- app shell and routing ----------
 const NAV = {
-  teacher: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['register', 'Register', 'register'], ['reports', 'Reports', 'reports'], ['settings', 'Settings', 'settings']],
-  student: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['history', 'History', 'history'], ['settings', 'Settings', 'settings']],
+  teacher: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['register', 'Register', 'register'], ['requests', 'Requests', 'requests'], ['reports', 'Reports', 'reports'], ['settings', 'Settings', 'settings']],
+  student: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['checkin', 'Check in', 'checkin'], ['history', 'History', 'history'], ['settings', 'Settings', 'settings']],
 };
 
 function startApp() {
+  clearInterval(authTimer);
   const nav = NAV[user.role];
   $('#app').innerHTML = `
   <div class="shell">
@@ -277,6 +430,18 @@ function startApp() {
   $('#outBtn').onclick = () => signOut();
   if (!location.hash || location.hash === '#/') location.hash = '#/home';
   route();
+  refreshBadge();
+}
+
+async function refreshBadge() {
+  if (!user || user.role !== 'teacher') return;
+  try {
+    const { items } = await api('GET', '/leave-requests');
+    const n = items.filter((i) => i.status === 'pending').length;
+    const a = $('.dock a[data-nav="requests"]'); if (!a) return;
+    const old = $('.badge', a); if (old) old.remove();
+    if (n) a.insertAdjacentHTML('beforeend', `<span class="badge" aria-label="${n} waiting">${n}</span>`);
+  } catch { /* badge is optional */ }
 }
 
 function moveDock() {
@@ -294,6 +459,7 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => user
 
 async function route() {
   if (!user) return;
+  closeModal();
   const [, page = 'home', arg] = location.hash.split('/');
   const pages = NAV[user.role].map((n) => n[0]);
   const cur = pages.includes(page) ? page : 'home';
@@ -302,8 +468,7 @@ async function route() {
   const view = $('#view');
   view.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const fn = (user.role === 'teacher' ? T : S)[cur];
-    await fn(view, arg);
+    await (user.role === 'teacher' ? T : S)[cur](view, arg);
   } catch (e) {
     if (!user) return;
     view.innerHTML = `<section class="glass panel empty"><h3>Could not load this page</h3><p>${esc(e.message)}</p><button class="btn" id="retry">Try again</button></section>`;
@@ -314,11 +479,11 @@ window.addEventListener('hashchange', route);
 
 const greet = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; };
 const first = (n) => String(n).split(' ')[0];
-
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('Code copied.'); }
   catch { toast('Copy failed. Select the code and copy it by hand.', true); }
 }
+const classOptions = (classes, sel) => classes.map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.emoji || '')} ${esc(c.name)}</option>`).join('');
 
 // ---------- teacher pages ----------
 const T = {};
@@ -328,7 +493,7 @@ T.home = async (view) => {
   const min = user.threshold;
   if (!d.classes.length) {
     view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>
-    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or load a sample class to see how reports look.</p>
+    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or load a sample class to see how the reports look.</p>
     <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button><button class="btn soft" id="demo">Load sample class</button></div></section>`;
     $('#mk').onclick = () => newClassModal();
     $('#demo').onclick = loadDemo;
@@ -343,8 +508,9 @@ T.home = async (view) => {
       <div class="grid cols-3">
         <div class="glass stat"><b>${d.totals.classes}</b><span>Classes</span></div>
         <div class="glass stat"><b>${d.totals.students}</b><span>Students</span></div>
-        <div class="glass stat ${risk ? 'warn' : ''}"><b>${risk}</b><span>Below ${min}%</span></div>
+        <div class="glass stat ${risk ? 'alert' : ''}"><b>${risk}</b><span>Below ${min}%</span></div>
       </div>
+      ${d.pendingRequests ? `<a class="glass stat alert" href="#/requests"><b>${d.pendingRequests}</b><span>Leave request${d.pendingRequests === 1 ? '' : 's'} waiting for you. Open Requests.</span></a>` : ''}
       <section class="glass panel"><h2>Trend</h2><p class="sub">Attendance rate on your last registers</p>${trendChart(d.trend)}</section>
     </div>
   </div>
@@ -363,7 +529,7 @@ function newClassModal() {
   const emojis = ['📘', '💻', '📐', '🧪', '🌍', '🎨', '⚙️', '📊'];
   openModal(`<h2>New class</h2><p class="sub">Students join with a code that appears after you create it.</p>
     <form id="ncf" style="margin-top:16px">
-      <div class="field"><label for="ncName">Class name</label><input id="ncName" type="text" maxlength="60" placeholder="Data Structures" required></div>
+      <div class="field"><label for="ncName">Class name</label><input id="ncName" type="text" maxlength="60" placeholder="Data Structures"></div>
       <div class="field"><label for="ncCode">Course code (optional)</label><input id="ncCode" type="text" maxlength="20" placeholder="MCA-102"></div>
       <div class="field"><label id="icl">Icon</label><div class="emoji-pick" role="radiogroup" aria-labelledby="icl">${emojis.map((e, i) => `<label><input type="radio" name="em" value="${e}" ${i === 0 ? 'checked' : ''}><span>${e}</span></label>`).join('')}</div></div>
       <p class="error" id="ncErr" role="alert"></p>
@@ -383,21 +549,74 @@ async function loadDemo() {
   try { await api('POST', '/demo'); toast('Sample class loaded.'); route(); } catch (e) { toast(e.message, true); }
 }
 
+function noticeModal(classes, selected) {
+  openModal(`<h2>Post a notice</h2><p class="sub">Students in the class see it on their Home page.</p>
+    <form id="nf" style="margin-top:16px">
+      <div class="field"><label for="nc">Class</label><select id="nc">${classOptions(classes, selected)}</select></div>
+      <div class="field"><label for="nb">Notice</label><textarea id="nb" maxlength="500" placeholder="Test on Monday. Bring a calculator."></textarea></div>
+      <p class="error" id="nErr" role="alert"></p>
+      <div class="actions"><button type="button" class="btn soft" data-cancel>Cancel</button><button class="btn" type="submit">Post notice</button></div></form>`, (root, close) => {
+    $('#nf', root).onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('POST', `/classes/${$('#nc', root).value}/notices`, { body: $('#nb', root).value }); close(); toast('Notice posted.'); if (location.hash.startsWith('#/requests')) route(); }
+      catch (ex) { $('#nErr', root).textContent = ex.message; }
+    };
+  });
+}
+
+// Live check-in code: students type it on their own phone to mark themselves present.
+async function checkinModal(cls) {
+  const st = await api('GET', `/classes/${cls.id}/checkin`);
+  openModal(`<h2>Check-in code</h2><p class="sub">${esc(cls.emoji || '')} ${esc(cls.name)}</p><div id="ck" style="margin-top:14px"></div>`, (root, close, setCleanup) => {
+    let timer = null, poll = null;
+    const stop = () => { clearInterval(timer); clearInterval(poll); };
+    setCleanup(stop);
+    const idle = (msg) => {
+      stop();
+      $('#ck', root).innerHTML = `${msg ? `<p class="sub" style="margin-bottom:12px">${msg}</p>` : '<p class="sub" style="margin-bottom:12px">Show a code on the board. Students enter it in Attendly under Check in and are marked present. The code stops working when time is up.</p>'}
+        <div class="field"><label for="mins">Code works for</label><select id="mins"><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select></div>
+        <p class="error" id="ckErr" role="alert"></p>
+        <div class="actions"><button class="btn soft" data-cancel>Close</button><button class="btn" id="start">Start check-in</button></div>`;
+      $$('[data-cancel]', root).forEach((b) => (b.onclick = close));
+      $('#start', root).onclick = async () => {
+        try { const a = await api('POST', `/classes/${cls.id}/checkin`, { minutes: Number($('#mins', root).value), date: todayStr() }); live(a, 0); }
+        catch (ex) { $('#ckErr', root).textContent = ex.message; }
+      };
+    };
+    const live = (a, present) => {
+      stop();
+      const left = () => Math.max(0, Math.round((Date.parse(a.expiresAt) - Date.now()) / 1000));
+      $('#ck', root).innerHTML = `<div class="big-code" aria-label="Code ${a.code.split('').join(' ')}">${a.code}</div>
+        <p class="timer" id="tm"></p><p class="timer" id="pc" style="margin-top:6px"></p>
+        <div class="actions" style="margin-top:18px"><button class="btn soft" id="end">Stop now</button><button class="btn" data-cancel>Keep running</button></div>`;
+      $$('[data-cancel]', root).forEach((b) => (b.onclick = close));
+      const paint = (n) => { $('#pc', root).textContent = `${n} student${n === 1 ? '' : 's'} marked present today`; };
+      const tick = () => { const s = left(); $('#tm', root).textContent = s ? `Time left ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'Time is up'; if (!s) idle('The code expired.'); };
+      paint(present); tick(); timer = setInterval(tick, 1000);
+      poll = setInterval(async () => { try { const x = await api('GET', `/classes/${cls.id}/checkin`); if (x.active) paint(x.present); } catch { /* ignore */ } }, 5000);
+      $('#end', root).onclick = async () => { try { await api('DELETE', `/classes/${cls.id}/checkin`); idle('Check-in stopped.'); } catch (ex) { toast(ex.message, true); } };
+    };
+    if (st.active) live(st.active, st.present); else idle('');
+  });
+}
+
 T.classes = async (view) => {
   const { classes } = await api('GET', '/classes');
   const min = user.threshold;
   view.innerHTML = `<div class="page-head row"><div><h1>Your classes</h1><p>Share the join code. Students enter it after they sign up.</p></div>
-    <div class="actions"><button class="btn" id="nc">New class</button></div></div>
+    <div class="actions"><button class="btn soft" id="pn" ${classes.length ? '' : 'disabled'}>Post notice</button><button class="btn" id="nc">New class</button></div></div>
     ${classes.length ? `<div class="grid cards">${classes.map((c) => `
       <article class="glass class-card">
-        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}</p></div></div>
+        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}${c.isDemo ? ' · sample' : ''}</p></div></div>
         <div class="code-box"><div><small>Join code</small><code>${esc(c.joinCode)}</code></div><button class="icon-btn" data-copy="${esc(c.joinCode)}" aria-label="Copy join code for ${esc(c.name)}">${icon('copy')}</button></div>
         <div><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="sub">Attendance</span>${chip(c.rate, min)}</div><div class="meter ${band(c.rate, min)}"><i style="width:${c.rate || 0}%"></i></div></div>
-        <div class="actions"><a class="btn small" href="#/register/${c.id}">Take attendance</a><a class="btn small soft" href="#/reports/${c.id}">Report</a><button class="btn small soft" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>
+        <div class="actions"><a class="btn small" href="#/register/${c.id}">Take attendance</a><button class="btn small soft" data-ck="${c.id}">Check-in code</button><a class="btn small soft" href="#/reports/${c.id}">Report</a><button class="btn small soft" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>
       </article>`).join('')}</div>` : `<section class="glass panel empty"><h3>No classes yet</h3><p>Create one to get a join code for your students.</p><button class="btn" id="nc2">Create a class</button></section>`}`;
   $('#nc').onclick = newClassModal;
+  $('#pn').onclick = () => noticeModal(classes);
   const nc2 = $('#nc2'); if (nc2) nc2.onclick = newClassModal;
   $$('[data-copy]', view).forEach((b) => (b.onclick = () => copyText(b.dataset.copy)));
+  $$('[data-ck]', view).forEach((b) => (b.onclick = () => checkinModal(classes.find((c) => c.id === b.dataset.ck)).catch((e) => toast(e.message, true))));
   $$('[data-del]', view).forEach((b) => (b.onclick = () => confirmBox('Delete ' + b.dataset.name + '?', 'This removes the class and all of its attendance records. It cannot be undone.', 'Delete class', async () => {
     try { await api('DELETE', '/classes/' + b.dataset.del); toast('Class deleted.'); route(); } catch (e) { toast(e.message, true); }
   })));
@@ -415,15 +634,16 @@ T.register = async (view, arg) => {
   let date = todayStr();
   let marks = {};
   let students = [];
+  const cls = () => classes.find((c) => c.id === classId);
 
   const draw = () => {
     const q = ($('#q') && $('#q').value || '').toLowerCase();
     const counts = Object.fromEntries(STATUS.map(([k]) => [k, 0]));
     students.forEach((s) => marks[s.id] && counts[marks[s.id]]++);
     const unmarked = students.filter((s) => !marks[s.id]).length;
-    const rows = students.filter((s) => s.name.toLowerCase().includes(q)).map((s) => `
-      <div class="reg-row"><div class="row" style="padding:0;background:none">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>Overall ${s.rate === null ? 'no data' : s.rate + '%'}</small></div></div>
-      <div class="seg" role="radiogroup" aria-label="Attendance for ${esc(s.name)}">${STATUS.map(([k, n]) => `<label class="s-${k}"><input type="radio" name="st-${s.id}" value="${k}" data-sid="${s.id}" ${marks[s.id] === k ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div></div>`).join('');
+    const rows = students.filter((s) => s.name.toLowerCase().includes(q) || (s.rollNo || '').toLowerCase().includes(q)).map((s) => `
+      <div class="reg-row"><div class="row" style="padding:0;background:none">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${s.rollNo ? esc(s.rollNo) + ' · ' : ''}Overall ${s.rate === null ? 'no data' : s.rate + '%'}</small></div></div>
+      <div class="seg" role="radiogroup" aria-label="Attendance for ${esc(s.name)}">${STATUS.map(([k, n]) => `<label><input type="radio" name="st-${s.id}" value="${k}" data-sid="${s.id}" ${marks[s.id] === k ? 'checked' : ''}><span>${sym(k)}${n}</span></label>`).join('')}</div></div>`).join('');
     $('#roster').innerHTML = students.length
       ? `<div class="list" style="margin-top:0">${rows || '<div class="empty"><p>No student matches that search.</p></div>'}</div>`
       : `<div class="glass panel empty"><h3>No students in this class yet</h3><p>Ask students to sign up and enter the join code <b>${esc(cls().joinCode)}</b>.</p></div>`;
@@ -431,8 +651,6 @@ T.register = async (view, arg) => {
     $('#save').disabled = !students.length;
     $('#allP').disabled = !students.length;
   };
-  const cls = () => classes.find((c) => c.id === classId);
-
   const load = async () => {
     $('#roster').innerHTML = '<div class="loading">Loading…</div>';
     const r = await api('GET', `/classes/${classId}/roster?date=${date}`);
@@ -443,10 +661,11 @@ T.register = async (view, arg) => {
 
   view.innerHTML = `<div class="page-head"><h1>Register</h1><p>Mark each student, then save. Saving again for the same day updates it.</p></div>
   <section class="glass toolbar no-print">
-    <div class="field"><label for="selC">Class</label><select id="selC">${classes.map((c) => `<option value="${c.id}" ${c.id === classId ? 'selected' : ''}>${esc(c.emoji || '')} ${esc(c.name)}</option>`).join('')}</select></div>
+    <div class="field"><label for="selC">Class</label><select id="selC">${classOptions(classes, classId)}</select></div>
     <div class="field"><label for="selD">Date</label><input id="selD" type="date" value="${date}" max="${todayStr()}"></div>
-    <div class="field"><label for="q">Find a student</label><input id="q" type="search" placeholder="Name"></div>
+    <div class="field"><label for="q">Find a student</label><input id="q" type="search" placeholder="Name or roll number"></div>
     <button class="btn soft" id="allP" type="button">Mark all present</button>
+    <button class="btn soft" id="ck" type="button">Check-in code</button>
   </section>
   <div id="roster"></div>
   <div class="glass savebar no-print"><div class="tally" id="tally"></div><button class="btn" id="save" type="button">Save register</button></div>`;
@@ -455,6 +674,7 @@ T.register = async (view, arg) => {
   $('#selD').onchange = (e) => { if (e.target.value) { date = e.target.value; load().catch((x) => toast(x.message, true)); } };
   $('#q').oninput = draw;
   $('#allP').onclick = () => { students.forEach((s) => (marks[s.id] = 'present')); draw(); };
+  $('#ck').onclick = () => checkinModal(cls()).then(() => {}).catch((x) => toast(x.message, true));
   $('#roster').addEventListener('change', (e) => { if (e.target.dataset.sid) { marks[e.target.dataset.sid] = e.target.value; draw(); } });
   $('#save').onclick = async () => {
     const records = students.filter((s) => marks[s.id]).map((s) => ({ studentId: s.id, status: marks[s.id] }));
@@ -469,6 +689,29 @@ T.register = async (view, arg) => {
   await load();
 };
 
+T.requests = async (view) => {
+  const [lv, nt, cl] = await Promise.all([api('GET', '/leave-requests'), api('GET', '/notices'), api('GET', '/classes')]);
+  const pending = lv.items.filter((i) => i.status === 'pending');
+  const done = lv.items.filter((i) => i.status !== 'pending');
+  const card = (r, actions) => `<div class="row wrap">${avatar(r.student)}<div class="grow"><b>${esc(r.student)}${r.rollNo ? ' · ' + esc(r.rollNo) : ''}</b><small>${esc(r.className)} · ${fmtDate(r.date)}</small><small>“${esc(r.reason)}”${r.phone ? ' · ' + esc(r.phone) : ''}</small></div>${actions}</div>`;
+  view.innerHTML = `<div class="page-head row"><div><h1>Requests</h1><p>Leave requests from students, and notices you posted.</p></div><div class="actions"><button class="btn" id="pn" ${cl.classes.length ? '' : 'disabled'}>Post notice</button></div></div>
+  <div class="grid cols-2">
+    <section class="glass panel"><h2>Waiting for you</h2><p class="sub">Approving marks that day as Leave in the register.</p>
+      ${pending.length ? `<div class="list">${pending.map((r) => card(r, `<div class="actions"><button class="btn small" data-do="approve" data-id="${r.id}">Approve</button><button class="btn small soft" data-do="reject" data-id="${r.id}">Reject</button></div>`)).join('')}</div>` : '<div class="empty"><p>No requests waiting.</p></div>'}</section>
+    <section class="glass panel"><h2>Decided</h2><p class="sub">Most recent first</p>
+      ${done.length ? `<div class="list">${done.slice(0, 12).map((r) => card(r, `<span class="chip ${r.status === 'approved' ? 'good' : 'bad'}">${r.status === 'approved' ? 'Approved' : '<span>Rejected</span>'}</span>`)).join('')}</div>` : '<div class="empty"><p>Nothing decided yet.</p></div>'}</section>
+  </div>
+  <h2 class="section-title">Your notices</h2>
+  <section class="glass panel">${nt.items.length ? `<div class="list" style="margin-top:0">${nt.items.map((n) => `<div class="notice"><small>${esc(n.className)} · ${fmtWhen(n.at)}</small>${esc(n.body)}<div style="margin-top:8px"><button class="link" data-del-n="${n.id}">Delete</button></div></div>`).join('')}</div>` : '<div class="empty"><p>No notices yet. Post one for a class and students see it on Home.</p></div>'}</section>`;
+  $('#pn').onclick = () => noticeModal(cl.classes);
+  $$('[data-do]', view).forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { await api('POST', '/leave-requests/' + b.dataset.id, { decision: b.dataset.do }); toast(b.dataset.do === 'approve' ? 'Approved.' : 'Rejected.'); await route(); refreshBadge(); }
+    catch (e) { toast(e.message, true); b.disabled = false; }
+  }));
+  $$('[data-del-n]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/notices/' + b.dataset.delN); toast('Notice deleted.'); route(); } catch (e) { toast(e.message, true); } }));
+};
+
 T.reports = async (view, arg) => {
   const { classes } = await api('GET', '/classes');
   if (!classes.length) { view.innerHTML = `<div class="page-head"><h1>Reports</h1></div><section class="glass panel empty"><h3>No classes yet</h3><p>Reports appear once you have a class with attendance.</p><a class="btn" href="#/classes">Go to classes</a></section>`; return; }
@@ -476,16 +719,16 @@ T.reports = async (view, arg) => {
   const r = await api('GET', '/reports/' + classId);
   view.innerHTML = `<div class="page-head row"><div><h1>Reports</h1><p>${r.days} register day${r.days === 1 ? '' : 's'} recorded. Late counts as attended. Leave is excused.</p></div>
     <div class="actions no-print"><button class="btn soft" id="csv">Download CSV</button><button class="btn soft" id="prt">Print</button></div></div>
-    <section class="glass toolbar no-print"><div class="field"><label for="rc">Class</label><select id="rc">${classes.map((c) => `<option value="${c.id}" ${c.id === classId ? 'selected' : ''}>${esc(c.emoji || '')} ${esc(c.name)}</option>`).join('')}</select></div></section>
-    <section class="glass panel"><h2>${esc(r.class.name)}</h2><p class="sub">Highlighted when below ${r.threshold}%</p>
-    ${r.rows.length ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Student</th><th class="n">Present</th><th class="n">Late</th><th class="n">Absent</th><th class="n">Leave</th><th class="n">Rate</th></tr></thead><tbody>
-      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${esc(s.email.endsWith('@demo.attendly') ? 'sample student' : s.email)}</span></td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
+    <section class="glass toolbar no-print"><div class="field"><label for="rc">Class</label><select id="rc">${classOptions(classes, classId)}</select></div></section>
+    <section class="glass panel"><h2>${esc(r.class.name)}</h2><p class="sub">Dashed marks are below ${r.threshold}%</p>
+    ${r.rows.length ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Student</th><th>Mobile</th><th class="n">Present</th><th class="n">Late</th><th class="n">Absent</th><th class="n">Leave</th><th class="n">Rate</th></tr></thead><tbody>
+      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${s.rollNo ? esc(s.rollNo) + ' · ' : ''}${esc(s.email.endsWith('@demo.attendly') ? 'sample student' : s.email)}</span></td><td>${esc(s.phone || '-')}</td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
   $('#rc').onchange = (e) => { store.set('attendly_class', e.target.value); location.hash = '#/reports/' + e.target.value; };
   $('#prt').onclick = () => window.print();
   $('#csv').onclick = () => {
     const q = (v) => '"' + String(v).replace(/"/g, '""') + '"';
-    const lines = [['Student', 'Email', 'Present', 'Late', 'Absent', 'Leave', 'Rate %'].map(q).join(',')]
-      .concat(r.rows.map((s) => [s.name, s.email, s.present, s.late, s.absent, s.leave, s.rate === null ? '' : s.rate].map(q).join(',')));
+    const lines = [['Student', 'Roll no', 'Email', 'Mobile', 'Present', 'Late', 'Absent', 'Leave', 'Rate %'].map(q).join(',')]
+      .concat(r.rows.map((s) => [s.name, s.rollNo, s.email, s.phone, s.present, s.late, s.absent, s.leave, s.rate === null ? '' : s.rate].map(q).join(',')));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     a.download = `${r.class.name.replace(/[^\w-]+/g, '_')}-attendance-${todayStr()}.csv`;
@@ -496,30 +739,51 @@ T.reports = async (view, arg) => {
 // ---------- settings (both roles) ----------
 async function settingsPage(view) {
   const teacher = user.role === 'teacher';
+  const act = await api('GET', '/me/activity').catch(() => ({ items: [] }));
   view.innerHTML = `<div class="page-head"><h1>Settings</h1><p>${esc(user.email)}</p></div>
   <div class="grid cols-2">
-    <section class="glass panel"><h2>Profile</h2>
-      <form id="pf" style="margin-top:14px">
-        <div class="field"><label for="sName">Full name</label><input id="sName" type="text" maxlength="60" value="${esc(user.name)}"></div>
-        ${teacher ? `<div class="field"><label for="sMin">Minimum attendance: <b id="minVal">${user.threshold}%</b></label><input id="sMin" type="range" min="40" max="100" step="5" value="${user.threshold}"><p class="hint">Students below this show up under Needs attention.</p></div>` : ''}
-        <p class="error" id="pfErr" role="alert"></p>
-        <button class="btn" type="submit">Save changes</button>
-      </form></section>
     <div class="stack">
-      <section class="glass panel"><h2>Appearance</h2><p class="sub">Light and dark both follow the water.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="th">Switch theme</button></div></section>
+      <section class="glass panel"><h2>Profile</h2>
+        <form id="pf" style="margin-top:14px">
+          <div class="field"><label for="sName">Full name</label><input id="sName" type="text" maxlength="60" value="${esc(user.name)}"></div>
+          <div class="row2"><div class="field"><label for="sPhone">Mobile number</label><input id="sPhone" type="tel" maxlength="16" value="${esc(user.phone || '')}"></div>
+          ${teacher ? '' : `<div class="field"><label for="sRoll">Roll number</label><input id="sRoll" type="text" maxlength="30" value="${esc(user.rollNo || '')}"></div>`}</div>
+          ${teacher ? `<div class="field"><label for="sMin">Minimum attendance: <b id="minVal">${user.threshold}%</b></label><input id="sMin" type="range" min="40" max="100" step="5" value="${user.threshold}"><p class="hint">Students below this show up under Needs attention.</p></div>` : ''}
+          <p class="error" id="pfErr" role="alert"></p><button class="btn" type="submit">Save changes</button>
+        </form></section>
+      <section class="glass panel"><h2>Change password</h2><p class="sub">Your other devices are signed out when you change it.</p>
+        <form id="pw" style="margin-top:14px">${pwField('cur', 'Current password', 'current-password')}${pwField('nxt', 'New password', 'new-password', true)}
+          <p class="error" id="pwErr" role="alert"></p><button class="btn" type="submit">Change password</button></form></section>
+    </div>
+    <div class="stack">
+      <section class="glass panel"><h2>Recent security activity</h2><p class="sub">If you do not recognise something, change your password and sign out everywhere.</p>
+        <div class="list">${act.items.length ? act.items.map((i) => `<div class="row"><div class="grow"><b>${esc(i.action)}</b><small>${fmtWhen(i.at)}${i.ip ? ' · ' + esc(i.ip) : ''}</small></div></div>`).join('') : '<div class="empty"><p>Nothing yet.</p></div>'}</div>
+        <div class="actions" style="margin-top:14px"><button class="btn soft" id="all">Sign out of all devices</button></div></section>
+      <section class="glass panel"><h2>Appearance</h2><p class="sub">Two colours, light or inverted.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="th">Switch theme</button></div></section>
       ${teacher ? `<section class="glass panel"><h2>Sample class</h2><p class="sub">Adds 12 fictional students with five weeks of attendance. Good for a demo. Delete it from Classes when you are done.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="dm">Load sample class</button></div></section>` : ''}
       <section class="glass panel"><h2>Session</h2><div class="actions" style="margin-top:12px"><button class="btn soft" id="so">Sign out</button></div></section>
     </div>
   </div>`;
+  bindPw(view);
   const m = $('#sMin'); if (m) m.oninput = () => ($('#minVal').textContent = m.value + '%');
   $('#pf').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const out = await api('PATCH', '/me', { name: $('#sName').value, ...(m ? { threshold: Number(m.value) } : {}) });
-      user = out.user; toast('Saved.');
-      $('.who b').textContent = user.name;
+      const out = await api('PATCH', '/me', { name: $('#sName').value, phone: $('#sPhone').value, ...(m ? { threshold: Number(m.value) } : { rollNo: $('#sRoll').value }) });
+      user = out.user; toast('Saved.'); $('.who b').textContent = user.name; $('#pfErr').textContent = '';
     } catch (ex) { $('#pfErr').textContent = ex.message; }
   };
+  $('#pw').onsubmit = async (e) => {
+    e.preventDefault();
+    const pp = pwProblem($('#nxt').value); if (pp) { $('#pwErr').textContent = pp; return; }
+    try {
+      const out = await api('POST', '/me/password', { current: $('#cur').value, next: $('#nxt').value });
+      token = out.token; store.set('attendly_token', token); toast('Password changed. Other devices were signed out.'); route();
+    } catch (ex) { $('#pwErr').textContent = ex.message; }
+  };
+  $('#all').onclick = () => confirmBox('Sign out of all devices?', 'Every device, including this one, will need the password again.', 'Sign out everywhere', async () => {
+    try { await api('POST', '/me/logout-all'); signOut(true); toast('Signed out of all devices.'); } catch (e) { toast(e.message, true); }
+  });
   $('#th').onclick = () => $('#themeBtn').click();
   $('#so').onclick = () => signOut();
   const dm = $('#dm'); if (dm) dm.onclick = loadDemo;
@@ -529,19 +793,36 @@ T.settings = settingsPage;
 // ---------- student pages ----------
 const S = {};
 
+function leaveModal(c) {
+  openModal(`<h2>Ask for leave</h2><p class="sub">${esc(c.emoji || '')} ${esc(c.name)} · your teacher approves or rejects it.</p>
+    <form id="lf" style="margin-top:16px">
+      <div class="field"><label for="ld">Date</label><input id="ld" type="date" value="${todayStr()}" min="${addDays(todayStr(), -7)}" max="${addDays(todayStr(), 60)}"></div>
+      <div class="field"><label for="lr">Reason</label><textarea id="lr" maxlength="200" placeholder="Fever, family function, exam in another subject…"></textarea></div>
+      <p class="error" id="lErr" role="alert"></p>
+      <div class="actions"><button type="button" class="btn soft" data-cancel>Cancel</button><button class="btn" type="submit">Send request</button></div></form>`, (root, close) => {
+    $('#lf', root).onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('POST', `/classes/${c.id}/leave-requests`, { date: $('#ld', root).value, reason: $('#lr', root).value }); close(); toast('Request sent to your teacher.'); route(); }
+      catch (ex) { $('#lErr', root).textContent = ex.message; }
+    };
+  });
+}
+
 S.home = async (view) => {
   const d = await api('GET', '/student/summary');
+  const mins = d.classes.map((c) => c.threshold);
   const low = d.classes.filter((c) => c.stats.rate !== null && c.stats.rate < c.threshold);
   view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>
   <div class="grid home-grid">
-    <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.overall.rate, 'all classes', Math.min(...d.classes.map((c) => c.threshold), 75))}
+    <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.overall.rate, 'all classes', mins.length ? Math.min(...mins) : 75)}
       <p class="sub">${d.overall.present + d.overall.late} attended · ${d.overall.absent} missed · ${d.overall.leave} on leave</p></section>
     <div class="stack">
-      ${low.length ? `<section class="glass panel"><h2>Watch these</h2><p class="sub">Below the minimum your teacher set</p><div class="list">${low.map((c) => `<div class="row"><div class="class-emoji" style="width:40px;height:40px;font-size:1.2rem">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>Minimum ${c.threshold}% · ${esc(c.teacher)}</small></div>${chip(c.stats.rate, c.threshold)}</div>`).join('')}</div></section>` : ''}
+      ${d.notices.length ? `<section class="glass panel"><h2>Class notices</h2><div class="list">${d.notices.slice(0, 4).map((n) => `<div class="notice"><small>${esc(n.className)} · ${fmtWhen(n.at)}</small>${esc(n.body)}</div>`).join('')}</div></section>` : ''}
+      ${low.length ? `<section class="glass panel"><h2>Watch these</h2><p class="sub">Below the minimum your teacher set</p><div class="list">${low.map((c) => `<div class="row"><div class="mini">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>Minimum ${c.threshold}% · ${esc(c.teacher)}</small></div>${chip(c.stats.rate, c.threshold)}</div>`).join('')}</div></section>` : ''}
       <section class="glass panel"><h2>Join a class</h2><p class="sub">Enter the 6-character code from your teacher.</p>
-        <form id="jf" style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap"><input id="jc" type="text" maxlength="12" placeholder="e.g. K7M2QX" autocomplete="off" aria-label="Join code" style="flex:1;min-width:140px;text-transform:uppercase;letter-spacing:.14em;font-weight:700"><button class="btn" type="submit">Join class</button></form>
+        <form id="jf" style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap"><input id="jc" type="text" maxlength="12" placeholder="K7M2QX" autocomplete="off" aria-label="Join code" style="flex:1;min-width:140px;text-transform:uppercase;letter-spacing:.14em;font-weight:700"><button class="btn" type="submit">Join class</button></form>
         <p class="error" id="jErr" style="margin:10px 0 0" role="alert"></p></section>
-      ${d.classes.length ? `<section class="glass panel"><h2>Your classes</h2><div class="list">${d.classes.map((c) => `<div class="row"><div class="class-emoji" style="width:40px;height:40px;font-size:1.2rem">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.teacher)}</small><div class="meter ${band(c.stats.rate, c.threshold)}" style="margin-top:6px"><i style="width:${c.stats.rate || 0}%"></i></div></div>${chip(c.stats.rate, c.threshold)}</div>`).join('')}</div></section>` : ''}
+      ${d.classes.length ? `<section class="glass panel"><h2>Your classes</h2><div class="list">${d.classes.map((c) => `<div class="row wrap"><div class="mini">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.teacher)}</small><div class="meter ${band(c.stats.rate, c.threshold)}" style="margin-top:6px"><i style="width:${c.stats.rate || 0}%"></i></div></div>${chip(c.stats.rate, c.threshold)}</div>`).join('')}</div></section>` : ''}
     </div>
   </div>`;
   $('#jf').onsubmit = async (e) => {
@@ -552,16 +833,37 @@ S.home = async (view) => {
 };
 
 S.classes = async (view) => {
-  const { classes } = await api('GET', '/classes');
-  view.innerHTML = `<div class="page-head"><h1>Your classes</h1><p>Leaving a class removes its attendance from your view.</p></div>
-  ${classes.length ? `<div class="grid cards">${classes.map((c) => `<article class="glass class-card">
+  const d = await api('GET', '/student/summary');
+  const reqs = d.requests;
+  view.innerHTML = `<div class="page-head"><h1>Your classes</h1><p>See how many classes you can still miss, and ask for leave.</p></div>
+  ${d.classes.length ? `<div class="grid cards">${d.classes.map((c) => `<article class="glass class-card">
     <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.teacher)}${c.code ? ' · ' + esc(c.code) : ''}</p></div></div>
     <div><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="sub">${c.stats.present + c.stats.late} of ${c.stats.present + c.stats.late + c.stats.absent} sessions</span>${chip(c.stats.rate, c.threshold)}</div><div class="meter ${band(c.stats.rate, c.threshold)}"><i style="width:${c.stats.rate || 0}%"></i></div></div>
-    <div class="actions"><button class="btn small soft" data-leave="${c.id}" data-name="${esc(c.name)}">Leave class</button></div></article>`).join('')}</div>`
+    <p class="planner">${planner(c.stats, c.threshold)}</p>
+    <div class="actions"><button class="btn small" data-leave-req="${c.id}">Ask for leave</button><button class="btn small soft" data-leave="${c.id}" data-name="${esc(c.name)}">Leave class</button></div></article>`).join('')}</div>
+  <h2 class="section-title">Your leave requests</h2>
+  <section class="glass panel">${reqs.length ? `<div class="list" style="margin-top:0">${reqs.map((r) => `<div class="row wrap"><div class="grow"><b>${esc(r.className)} · ${fmtDate(r.date)}</b><small>“${esc(r.reason)}”</small></div>${r.status === 'pending' ? `<span class="chip warn">Waiting</span><button class="btn small soft" data-cancel-req="${r.id}">Cancel</button>` : `<span class="chip ${r.status === 'approved' ? 'good' : 'bad'}">${r.status === 'approved' ? 'Approved' : '<span>Rejected</span>'}</span>`}</div>`).join('')}</div>` : '<div class="empty"><p>No requests yet.</p></div>'}</section>`
     : `<section class="glass panel empty"><h3>You are not in any class</h3><p>Ask your teacher for a join code, then enter it on Home.</p><a class="btn" href="#/home">Go to Home</a></section>`}`;
+  $$('[data-leave-req]', view).forEach((b) => (b.onclick = () => leaveModal(d.classes.find((c) => c.id === b.dataset.leaveReq))));
+  $$('[data-cancel-req]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/leave-requests/' + b.dataset.cancelReq); toast('Request cancelled.'); route(); } catch (e) { toast(e.message, true); } }));
   $$('[data-leave]', view).forEach((b) => (b.onclick = () => confirmBox('Leave ' + b.dataset.name + '?', 'You can join again later with the code.', 'Leave class', async () => {
     try { await api('DELETE', `/classes/${b.dataset.leave}/leave`); toast('You left the class.'); route(); } catch (e) { toast(e.message, true); }
   })));
+};
+
+S.checkin = async (view) => {
+  view.innerHTML = `<div class="page-head"><h1>Check in</h1><p>Your teacher shows a 6-digit code in class. Type it here to mark yourself present.</p></div>
+  <section class="glass panel check-card"><h2>Enter the code</h2>
+    <form id="cf"><input id="cc" class="code-input" type="text" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000" aria-label="6-digit check-in code">
+    <p class="error" id="cErr" role="alert"></p><button class="btn wide" type="submit">Mark me present</button></form>
+    <p class="hint" style="margin-top:14px">Only students in the class can use the code, and it stops working when your teacher ends check-in.</p></section>`;
+  $('#cc').focus();
+  $('#cc').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); };
+  $('#cf').onsubmit = async (e) => {
+    e.preventDefault();
+    try { const o = await api('POST', '/checkin', { code: $('#cc').value }); $('#cErr').textContent = ''; toast('Marked present in ' + o.className + '.'); $('#cc').value = ''; }
+    catch (ex) { $('#cErr').textContent = ex.message; }
+  };
 };
 
 S.history = async (view) => {
@@ -572,13 +874,12 @@ S.history = async (view) => {
     const groups = {};
     rows.forEach((h) => (groups[h.date] = groups[h.date] || []).push(h));
     $('#hist').innerHTML = rows.length
-      ? Object.keys(groups).map((date) => `<div class="day-group"><h3>${fmtDate(date)}</h3><div class="list" style="margin-top:0">${groups[date].map((h) => `<div class="row"><div class="class-emoji" style="width:38px;height:38px;font-size:1.1rem">${esc(h.emoji || '📘')}</div><div class="grow"><b>${esc(h.className)}</b></div><span class="chip ${h.status === 'present' ? 'good' : h.status === 'late' ? 'warn' : h.status === 'absent' ? 'bad' : 'none'}">${esc(STATUS.find((s) => s[0] === h.status)[1])}</span></div>`).join('')}</div></div>`).join('')
+      ? Object.keys(groups).map((date) => `<div class="day-group"><h3>${fmtDate(date)}</h3><div class="list" style="margin-top:0">${groups[date].map((h) => `<div class="row"><div class="mini">${esc(h.emoji || '📘')}</div><div class="grow"><b>${esc(h.className)}</b></div>${statusChip(h.status)}</div>`).join('')}</div></div>`).join('')
       : `<div class="empty"><h3>Nothing to show</h3><p>${d.history.length ? 'No records match these filters.' : 'Your teachers have not recorded attendance yet.'}</p></div>`;
   };
   view.innerHTML = `<div class="page-head"><h1>History</h1><p>Every day your teachers recorded.</p></div>
-  <section class="glass panel"><div class="toolbar" style="padding:0;margin:0">
-    <div class="field"><label for="hc">Class</label><select id="hc"><option value="all">All classes</option>${d.classes.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div></div>
-    <div class="filters" role="group" aria-label="Filter by status">${[['all', 'All'], ...STATUS].map(([k, n]) => `<button type="button" data-st="${k}" aria-pressed="${k === 'all'}">${n}</button>`).join('')}</div>
+  <section class="glass panel"><div class="field" style="max-width:320px"><label for="hc">Class</label><select id="hc"><option value="all">All classes</option>${d.classes.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    <div class="filters" role="group" aria-label="Filter by status">${[['all', 'All'], ...STATUS].map(([k, n]) => `<button type="button" data-st="${k}" aria-pressed="${k === 'all'}">${k === 'all' ? '' : sym(k)}${n}</button>`).join('')}</div>
     <div id="hist"></div></section>`;
   $('#hc').onchange = (e) => { cls = e.target.value; draw(); };
   $$('[data-st]', view).forEach((b) => (b.onclick = () => { st = b.dataset.st; $$('[data-st]', view).forEach((x) => x.setAttribute('aria-pressed', x === b)); draw(); }));
@@ -588,7 +889,7 @@ S.settings = settingsPage;
 
 // ---------- boot ----------
 (async function boot() {
-  if (!token) return showAuth();
+  if (!token) return showAuth('in');
   try { user = (await api('GET', '/me')).user; startApp(); }
-  catch { if (!token) return; showAuth(); }
+  catch { if (!token) return; showAuth('in'); }
 })();

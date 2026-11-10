@@ -8,6 +8,8 @@ const assert = require('assert');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'attendly-'));
 process.env.SQLITE_FILE = path.join(tmp, 't.db');
+process.env.MAIL_STUB = '1';
+process.env.SHOW_OTP = 'true';
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 const api = require('../api/[...path].js');
@@ -23,6 +25,17 @@ async function call(method, url, body, token) {
   return { status: r.status, data: await r.json() };
 }
 const today = new Date().toISOString().slice(0, 10);
+const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+async function signup(role, name, email, extra = {}) {
+  let r = await call('POST', '/auth/register', { name, email, phone: '9876543210', password: 'Strong#Pass1', role, ...extra });
+  assert.equal(r.status, 201, 'register ' + email + ' ' + JSON.stringify(r.data));
+  assert.equal(r.data.pending, true);
+  r = await call('POST', '/auth/verify', { email, code: r.data.devOtp });
+  assert.equal(r.status, 200, 'verify ' + JSON.stringify(r.data));
+  return { token: r.data.token, id: r.data.user.id, email };
+}
 
 (async () => {
   await new Promise((r) => server.listen(0, r));
@@ -30,86 +43,129 @@ const today = new Date().toISOString().slice(0, 10);
   let n = 0;
   const ok = (name) => console.log('  ok', ++n, name);
 
-  // auth
-  let r = await call('POST', '/auth/register', { name: 'T', email: 'bad', password: 'x', role: 'teacher' });
-  assert.equal(r.status, 400); ok('register validates input');
-  r = await call('POST', '/auth/register', { name: 'Prof Rao', email: 'Rao@School.edu', password: 'longpassword', role: 'teacher' });
-  assert.equal(r.status, 201); const T = r.data.token; ok('teacher registers');
-  r = await call('POST', '/auth/register', { name: 'Prof Rao', email: 'rao@school.edu', password: 'longpassword', role: 'teacher' });
-  assert.equal(r.status, 409); ok('duplicate email blocked (case-insensitive)');
-  r = await call('POST', '/auth/login', { email: 'rao@school.edu', password: 'wrongwrong' });
-  assert.equal(r.status, 401); ok('wrong password rejected');
-  r = await call('POST', '/auth/login', { email: 'rao@school.edu', password: 'longpassword' });
-  assert.equal(r.status, 200); ok('login works');
-  r = await call('GET', '/me'); assert.equal(r.status, 401); ok('no token = 401');
-  r = await call('GET', '/me', null, T + 'x'); assert.equal(r.status, 401); ok('tampered token = 401');
+  // ---- sign up rules ----
+  const good = { name: 'Prof Rao', email: 'Rao@School.edu', phone: '98765 43210', role: 'teacher' };
+  let r = await call('POST', '/auth/register', { ...good, password: 'short1' }); assert.equal(r.status, 400); ok('short password rejected');
+  r = await call('POST', '/auth/register', { ...good, password: 'onlyletters' }); assert.equal(r.status, 400); ok('password without a number rejected');
+  r = await call('POST', '/auth/register', { ...good, password: 'Password123' }); assert.equal(r.status, 400); ok('common password rejected');
+  r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1', phone: '' }); assert.equal(r.status, 400); ok('phone number is required');
+  r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1', phone: '12ab' }); assert.equal(r.status, 400); ok('bad phone number rejected');
 
-  // classes
-  r = await call('POST', '/classes', { name: 'Maths', code: 'MA-1', emoji: '📐' }, T);
+  // ---- email code (OTP) ----
+  r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1' });
+  assert.equal(r.status, 201); assert.equal(r.data.pending, true); assert.ok(!r.data.token); const code1 = r.data.devOtp; ok('register sends code, gives no token yet');
+  assert.ok(global.__mailbox.length >= 1 && global.__mailbox[0].to === 'rao@school.edu' && global.__mailbox[0].text.includes(code1)); ok('email contains the code and goes to the typed address');
+  r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1' }); assert.equal(r.status, 429); ok('asking for a second code within a minute is blocked');
+  r = await call('POST', '/auth/login', { email: 'rao@school.edu', password: 'Strong#Pass1' });
+  assert.equal(r.status, 403); assert.equal(r.data.needsVerify, true); ok('cannot sign in before email is verified');
+  r = await call('POST', '/auth/verify', { email: 'rao@school.edu', code: '000000' }); assert.equal(r.status, 400); ok('wrong code rejected');
+  for (let i = 0; i < 4; i++) await call('POST', '/auth/verify', { email: 'rao@school.edu', code: '111111' });
+  r = await call('POST', '/auth/verify', { email: 'rao@school.edu', code: code1 }); assert.equal(r.status, 429); ok('after 5 wrong tries even the right code is refused');
+
+  // fresh signup flows from here (new emails)
+  const T = await signup('teacher', 'Prof Mehta', 'mehta@school.edu'); ok('teacher signs up and verifies');
+  r = await call('GET', '/me'); assert.equal(r.status, 401);
+  r = await call('GET', '/me', null, T.token + 'x'); assert.equal(r.status, 401); ok('missing or tampered token = 401');
+  r = await call('GET', '/me', null, T.token); assert.equal(r.data.user.phone, '9876543210'); ok('phone number saved on profile');
+
+  // ---- wrong passwords lock the account ----
+  const L = await signup('student', 'Lock Test', 'lock@mail.com');
+  for (let i = 0; i < 4; i++) { r = await call('POST', '/auth/login', { email: L.email, password: 'wrong-pass-9' }); assert.equal(r.status, 401); }
+  r = await call('POST', '/auth/login', { email: L.email, password: 'wrong-pass-9' }); assert.equal(r.status, 401);
+  r = await call('POST', '/auth/login', { email: L.email, password: 'Strong#Pass1' }); assert.equal(r.status, 423); ok('5 wrong passwords lock the account (right password refused while locked)');
+
+  // ---- forgot + reset password ----
+  r = await call('POST', '/auth/forgot', { email: 'nobody@nowhere.com' });
+  assert.equal(r.status, 200); assert.ok(!r.data.devOtp); ok('forgot password gives the same answer for unknown emails');
+  r = await call('POST', '/auth/forgot', { email: L.email }); assert.equal(r.status, 200); const rc = r.data.devOtp; assert.ok(rc);
+  r = await call('POST', '/auth/reset', { email: L.email, code: rc, password: 'weak' }); assert.equal(r.status, 400);
+  r = await call('POST', '/auth/reset', { email: L.email, code: '123450', password: 'Brand#New77' }); assert.equal(r.status, 400); ok('reset needs the right code and a strong password');
+  r = await call('POST', '/auth/reset', { email: L.email, code: rc, password: 'Brand#New77' }); assert.equal(r.status, 200);
+  r = await call('GET', '/me', null, L.token); assert.equal(r.status, 401); ok('reset signs out old sessions');
+  r = await call('POST', '/auth/login', { email: L.email, password: 'Brand#New77' }); assert.equal(r.status, 200); const Ltoken = r.data.token; ok('reset clears the lock and new password works');
+
+  // ---- change password / sign out everywhere / activity ----
+  r = await call('POST', '/me/password', { current: 'nope', next: 'Another#Pass8' }, Ltoken); assert.equal(r.status, 400);
+  r = await call('POST', '/me/password', { current: 'Brand#New77', next: 'Another#Pass8' }, Ltoken); assert.equal(r.status, 200);
+  const newTok = r.data.token;
+  r = await call('GET', '/me', null, Ltoken); assert.equal(r.status, 401);
+  r = await call('GET', '/me', null, newTok); assert.equal(r.status, 200); ok('change password keeps this session, ends the others');
+  r = await call('POST', '/me/logout-all', null, newTok); assert.equal(r.status, 200);
+  r = await call('GET', '/me', null, newTok); assert.equal(r.status, 401); ok('sign out of all devices');
+  r = await call('POST', '/auth/login', { email: L.email, password: 'Another#Pass8' }); const act = await call('GET', '/me/activity', null, r.data.token);
+  assert.ok(act.data.items.length >= 3 && act.data.items.some((i) => /Password changed/.test(i.action))); ok('activity log records security events');
+
+  // ---- classes, join, attendance (core) ----
+  r = await call('POST', '/classes', { name: 'Maths', code: 'MA-1', emoji: '📐' }, T.token);
   assert.equal(r.status, 201); const C = r.data.class; assert.equal(C.joinCode.length, 6); ok('class created with join code');
-
-  // students
   const S = [];
-  for (const nm of ['Asha', 'Bilal', 'Chitra']) {
-    r = await call('POST', '/auth/register', { name: nm + ' K', email: nm.toLowerCase() + '@mail.com', password: 'studentpass', role: 'student' });
-    assert.equal(r.status, 201); S.push({ token: r.data.token, id: r.data.user.id });
-  }
-  r = await call('POST', '/classes/join', { code: 'ZZZZZZ' }, S[0].token); assert.equal(r.status, 404); ok('bad join code');
+  for (const nm of ['Asha', 'Bilal', 'Chitra']) S.push(await signup('student', nm + ' K', nm.toLowerCase() + '@mail.com', { rollNo: 'R-' + nm }));
   for (const s of S) { r = await call('POST', '/classes/join', { code: C.joinCode.toLowerCase() }, s.token); assert.equal(r.status, 201); }
-  r = await call('POST', '/classes/join', { code: C.joinCode }, S[0].token); assert.equal(r.status, 409); ok('students join, duplicate join blocked');
-  r = await call('POST', '/classes/join', { code: C.joinCode }, T); assert.equal(r.status, 403); ok('teacher cannot join as student');
-
-  // attendance
-  r = await call('GET', `/classes/${C.id}/roster?date=${today}`, null, T);
-  assert.equal(r.data.students.length, 3); assert.equal(r.data.students[0].status, null); ok('roster lists 3 students');
+  r = await call('POST', '/classes/join', { code: C.joinCode }, S[0].token); assert.equal(r.status, 409);
+  r = await call('POST', '/classes/join', { code: C.joinCode }, T.token); assert.equal(r.status, 403); ok('students join; duplicate and teacher joins blocked');
+  r = await call('GET', `/classes/${C.id}/roster?date=${today}`, null, T.token);
+  assert.equal(r.data.students.length, 3); assert.equal(r.data.students[0].phone, '9876543210'); assert.equal(r.data.students[0].rollNo, 'R-Asha'); ok('teacher sees phone and roll number');
   r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [
-    { studentId: S[0].id, status: 'present' }, { studentId: S[1].id, status: 'absent' }, { studentId: S[2].id, status: 'late' } ] }, T);
-  assert.equal(r.status, 200); ok('attendance saved');
-  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[1].id, status: 'present' }] }, T);
-  assert.equal(r.status, 200); ok('attendance update (upsert)');
-  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[1].id, status: 'nope' }] }, T);
-  assert.equal(r.status, 400); ok('invalid status rejected');
-  r = await call('PUT', `/classes/${C.id}/attendance`, { date: '2999-01-01', records: [{ studentId: S[1].id, status: 'present' }] }, T);
-  assert.equal(r.status, 400); ok('future date rejected');
-  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[0].id, status: 'present' }] }, S[0].token);
-  assert.equal(r.status, 403); ok('student cannot mark attendance');
+    { studentId: S[0].id, status: 'present' }, { studentId: S[1].id, status: 'absent' }, { studentId: S[2].id, status: 'late' } ] }, T.token);
+  assert.equal(r.status, 200);
+  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[1].id, status: 'present' }] }, T.token); assert.equal(r.status, 200); ok('attendance saved and updated');
+  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[1].id, status: 'nope' }] }, T.token); assert.equal(r.status, 400);
+  r = await call('PUT', `/classes/${C.id}/attendance`, { date: '2999-01-01', records: [{ studentId: S[1].id, status: 'present' }] }, T.token); assert.equal(r.status, 400);
+  r = await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[0].id, status: 'present' }] }, S[0].token); assert.equal(r.status, 403); ok('bad status, future date and student writes are refused');
+  const T2 = await signup('teacher', 'Other Teacher', 'other@school.edu');
+  r = await call('GET', `/classes/${C.id}/roster`, null, T2.token); assert.equal(r.status, 404); ok('other teacher is locked out');
+  await call('PUT', `/classes/${C.id}/attendance`, { date: yesterday, records: [
+    { studentId: S[0].id, status: 'present' }, { studentId: S[1].id, status: 'absent' }, { studentId: S[2].id, status: 'leave' } ] }, T.token);
+  r = await call('GET', '/dashboard', null, T.token);
+  assert.equal(r.data.totals.students, 3); assert.equal(r.data.atRisk.length, 1); assert.equal(r.data.atRisk[0].name, 'Bilal K'); ok('dashboard totals and at-risk list');
+  r = await call('GET', `/reports/${C.id}`, null, T.token);
+  assert.equal(r.data.rows.find((x) => x.name === 'Chitra K').rate, 100); ok('report: late counts, leave is excused');
 
-  // second teacher cannot touch first teacher's class
-  r = await call('POST', '/auth/register', { name: 'Other Teacher', email: 'other@school.edu', password: 'longpassword', role: 'teacher' });
-  const T2 = r.data.token;
-  r = await call('GET', `/classes/${C.id}/roster`, null, T2); assert.equal(r.status, 404); ok('other teacher is locked out');
+  // ---- leave requests ----
+  r = await call('POST', `/classes/${C.id}/leave-requests`, { date: nextWeek, reason: 'Family function' }, S[0].token); assert.equal(r.status, 201);
+  r = await call('POST', `/classes/${C.id}/leave-requests`, { date: nextWeek, reason: 'Again' }, S[0].token); assert.equal(r.status, 409);
+  r = await call('POST', `/classes/${C.id}/leave-requests`, { date: nextWeek, reason: 'Hi' }, S[1].token); assert.equal(r.status, 400); ok('student asks for leave; duplicates and empty reasons refused');
+  r = await call('POST', `/classes/${C.id}/leave-requests`, { date: today, reason: 'Fever since morning' }, S[1].token); assert.equal(r.status, 201);
+  r = await call('GET', '/leave-requests', null, T.token); assert.equal(r.data.items.length, 2); assert.equal(r.data.items[0].status, 'pending'); const reqs = r.data.items;
+  r = await call('GET', '/dashboard', null, T.token); assert.equal(r.data.pendingRequests, 2); ok('teacher sees pending requests');
+  r = await call('GET', '/leave-requests', null, T2.token); assert.equal(r.data.items.length, 0);
+  r = await call('POST', '/leave-requests/' + reqs[0].id, { decision: 'approve' }, T2.token); assert.equal(r.status, 404); ok('other teacher cannot decide requests');
+  const sick = reqs.find((x) => x.student === 'Bilal K'), fam = reqs.find((x) => x.student === 'Asha K');
+  r = await call('POST', '/leave-requests/' + fam.id, { decision: 'approve' }, T.token); assert.equal(r.status, 200);
+  r = await call('POST', '/leave-requests/' + fam.id, { decision: 'reject' }, T.token); assert.equal(r.status, 409);
+  r = await call('POST', '/leave-requests/' + sick.id, { decision: 'reject' }, T.token); assert.equal(r.status, 200);
+  r = await call('GET', `/classes/${C.id}/roster?date=${nextWeek}`, null, T.token);
+  assert.equal(r.data.students.find((x) => x.name === 'Asha K').status, 'leave'); ok('approving marks the day as leave; rejecting does not');
+  r = await call('GET', '/student/summary', null, S[1].token); assert.equal(r.data.requests[0].status, 'rejected'); ok('student sees the decision');
 
-  // dashboard + report + student view
-  await call('PUT', `/classes/${C.id}/attendance`, { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), records: [
-    { studentId: S[0].id, status: 'present' }, { studentId: S[1].id, status: 'absent' }, { studentId: S[2].id, status: 'leave' } ] }, T);
-  r = await call('GET', '/dashboard', null, T);
-  assert.equal(r.data.totals.students, 3); assert.equal(r.data.totals.classes, 1);
-  assert.equal(r.data.atRisk.length, 1); assert.equal(r.data.atRisk[0].name, 'Bilal K'); ok('dashboard totals + at-risk');
-  r = await call('GET', `/reports/${C.id}`, null, T);
-  const asha = r.data.rows.find((x) => x.name === 'Asha K'); assert.equal(asha.rate, 100);
-  const chitra = r.data.rows.find((x) => x.name === 'Chitra K'); assert.equal(chitra.rate, 100); assert.equal(chitra.leave, 1); ok('report: leave is excused, late counts as attended');
-  r = await call('GET', '/student/summary', null, S[1].token);
-  assert.equal(r.data.overall.rate, 50); assert.equal(r.data.history.length, 2); ok('student summary');
-  r = await call('GET', '/dashboard', null, S[1].token); assert.equal(r.status, 403); ok('student blocked from teacher dashboard');
+  // ---- notices ----
+  r = await call('POST', `/classes/${C.id}/notices`, { body: 'Test on Monday. Bring a calculator.' }, T.token); assert.equal(r.status, 201);
+  r = await call('POST', `/classes/${C.id}/notices`, { body: 'Hack' }, S[0].token); assert.equal(r.status, 403);
+  r = await call('GET', '/student/summary', null, S[0].token); assert.equal(r.data.notices.length, 1); ok('teacher posts a notice; students see it; students cannot post');
+  r = await call('GET', '/notices', null, T.token); r = await call('DELETE', '/notices/' + r.data.items[0].id, null, T2.token); assert.equal(r.status, 404); ok('other teacher cannot delete notices');
 
-  // settings
-  r = await call('PATCH', '/me', { threshold: 150 }, T); assert.equal(r.status, 400);
-  r = await call('PATCH', '/me', { threshold: 60 }, T); assert.equal(r.data.user.threshold, 60); ok('threshold setting');
+  // ---- live check-in code ----
+  r = await call('POST', `/classes/${C.id}/checkin`, { minutes: 10, date: today }, S[0].token); assert.equal(r.status, 403);
+  r = await call('POST', `/classes/${C.id}/checkin`, { minutes: 10, date: today }, T.token); assert.equal(r.status, 201); const ck = r.data.code; assert.equal(ck.length, 6);
+  const out = await signup('student', 'Outsider', 'outsider@mail.com');
+  r = await call('POST', '/checkin', { code: ck }, out.token); assert.equal(r.status, 404); ok('student outside the class cannot use the code');
+  r = await call('POST', '/checkin', { code: '123456' }, S[2].token); assert.equal(r.status, 404);
+  await call('PUT', `/classes/${C.id}/attendance`, { date: today, records: [{ studentId: S[2].id, status: 'absent' }] }, T.token);
+  r = await call('POST', '/checkin', { code: ck }, S[2].token); assert.equal(r.status, 200);
+  r = await call('GET', `/classes/${C.id}/roster?date=${today}`, null, T.token); assert.equal(r.data.students.find((x) => x.name === 'Chitra K').status, 'present'); ok('right code marks the student present');
+  r = await call('GET', `/classes/${C.id}/checkin`, null, T.token); assert.equal(r.data.active.code, ck);
+  r = await call('DELETE', `/classes/${C.id}/checkin`, null, T.token);
+  r = await call('POST', '/checkin', { code: ck }, S[0].token); assert.equal(r.status, 404); ok('closing the check-in stops the code');
 
-  // demo
-  r = await call('POST', '/demo', null, T2); assert.equal(r.status, 201);
-  r = await call('POST', '/demo', null, T2); assert.equal(r.status, 409);
-  r = await call('GET', '/dashboard', null, T2);
-  assert.equal(r.data.totals.students, 12); assert.ok(r.data.totals.rate > 50); assert.ok(r.data.heat.length > 20); ok('sample class loads (12 students, history)');
-  const demoId = r.data.classes[0].id;
-  r = await call('DELETE', `/classes/${demoId}`, null, T2); assert.equal(r.status, 200);
-  r = await call('GET', '/dashboard', null, T2); assert.equal(r.data.totals.classes, 0); ok('sample class deletes cleanly');
-
-  // leave / remove / delete
+  // ---- settings, demo, cleanup ----
+  r = await call('PATCH', '/me', { threshold: 150 }, T.token); assert.equal(r.status, 400);
+  r = await call('PATCH', '/me', { threshold: 60, phone: '+919812345678' }, T.token); assert.equal(r.data.user.threshold, 60); assert.equal(r.data.user.phone, '+919812345678'); ok('profile settings');
+  r = await call('POST', '/demo', null, T2.token); assert.equal(r.status, 201);
+  r = await call('GET', '/dashboard', null, T2.token); assert.equal(r.data.totals.students, 12); assert.ok(r.data.heat.length > 20);
+  r = await call('DELETE', `/classes/${r.data.classes[0].id}`, null, T2.token); assert.equal(r.status, 200); ok('sample class loads and deletes cleanly');
   r = await call('DELETE', `/classes/${C.id}/leave`, null, S[2].token); assert.equal(r.status, 200);
-  r = await call('DELETE', `/classes/${C.id}/students/${S[1].id}`, null, T); assert.equal(r.status, 200);
-  r = await call('GET', `/classes/${C.id}/roster`, null, T); assert.equal(r.data.students.length, 1); ok('leave class + remove student');
-  r = await call('GET', '/nothing', null, T); assert.equal(r.status, 404); ok('unknown route 404');
+  r = await call('DELETE', `/classes/${C.id}/students/${S[1].id}`, null, T.token); assert.equal(r.status, 200); ok('leave class and remove student');
+  r = await call('GET', '/nothing', null, T.token); assert.equal(r.status, 404); ok('unknown route is 404');
 
   console.log(`\nAll ${n} checks passed.`);
   server.close();

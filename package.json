@@ -1,6 +1,6 @@
 {
   "name": "attendly",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "private": true,
   "description": "Attendance management system: teacher and student portals, REST API, Postgres.",
   "scripts": {
@@ -9,6 +9,7 @@
   },
   "engines": { "node": ">=22" },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.0"
+    "@neondatabase/serverless": "^1.0.0",
+    "nodemailer": "^6.9.16"
   }
 }
