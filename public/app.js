@@ -45,6 +45,12 @@ const ICONS = {
   moon: '<path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
   out: '<path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9"/>',
+  cal: '<rect x="3.5" y="5" width="17" height="15.5" rx="4"/><path d="M8 3v4M16 3v4M3.5 10h17"/>',
+  exam: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4M10 12h6M10 16h6"/>',
+  award: '<circle cx="12" cy="9" r="5.5"/><path d="M8.5 14l-1.5 7 5-2.5 5 2.5-1.5-7"/>',
+  door: '<path d="M5 21V4h10v17M3 21h18"/><circle cx="12" cy="12.5" r="0.8" fill="currentColor"/><path d="M18 9l3 3-3 3M21 12h-7"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 21c1-4.5 4-6 7.500-6s6.500 1.500 7.500 6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="3"/><path d="M5 15V6a2 2 0 012-2h9"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -54,7 +60,10 @@ const DROP = '<svg class="drop" viewBox="0 0 64 64" aria-hidden="true"><circle c
 let user = null;
 let token = store.get('attendly_token');
 
+const cache = new Map();
 async function api(method, path, body) {
+  const cacheable = method === 'GET' && !path.includes('/checkin') && !path.startsWith('/auth');
+  if (cacheable) { const h = cache.get(path); if (h && Date.now() - h.t < 20000) return structuredClone(h.d); }
   let res;
   try {
     res = await fetch('/api' + path, {
@@ -69,6 +78,7 @@ async function api(method, path, body) {
   try { data = await res.json(); } catch { /* empty body */ }
   if (res.status === 401 && token && !path.startsWith('/auth/')) { signOut(true); throw new Error(data.error || 'Please sign in again.'); }
   if (!res.ok) { const e = new Error(data.error || 'Request failed (' + res.status + ').'); e.data = data; throw e; }
+  if (cacheable) cache.set(path, { t: Date.now(), d: structuredClone(data) }); else if (method !== 'GET') cache.clear();
   return data;
 }
 
@@ -250,9 +260,9 @@ function showAuth(mode = 'in', data = {}) {
     <main class="auth">
       <section class="auth-hero">
         <div class="brand">${DROP}Attendly</div>
-        <h1>Take attendance in under a minute.</h1>
-        <p class="lead">Teachers run the register. Students watch their percentage rise and fall like water.</p>
-        <div class="auth-orb">${orb(86, 'attendance')}<p class="sub">Every class gets a live level. Drop under your teacher's minimum and the water turns to stripes.</p></div>
+        <h1>Your campus, in one place.</h1>
+        <p class="lead">Attendance, timetable, exams, results and requests for teachers and students.</p>
+        <div class="auth-orb">${orb(86, 'attendance')}<p class="sub">Verified accounts, live attendance and instant updates.</p></div>
       </section>
       <section class="auth-card glass" id="authCard" aria-label="Account"></section>
     </main>`;
@@ -264,7 +274,7 @@ function authCard(mode, d) {
   clearInterval(authTimer);
   const card = $('#authCard');
   const tabs = (m) => `<div class="tabs" role="tablist"><button role="tab" id="tabIn" aria-selected="${m === 'in'}">Sign in</button><button role="tab" id="tabUp" aria-selected="${m === 'up'}">Create account</button></div>`;
-  const demo = (code) => (code ? `<p class="demo-note">Demo mode is on, so the code is shown here: <b>${esc(code)}</b></p>` : '');
+  const demo = (code) => (code ? `<p class="demo-note">Your code: <b>${esc(code)}</b></p>` : '');
 
   if (mode === 'in') {
     card.innerHTML = `${tabs('in')}<form id="f" novalidate>
@@ -395,7 +405,7 @@ function finishLogin(out) {
 }
 
 function signOut(silent) {
-  token = null; store.del('attendly_token'); user = null;
+  token = null; store.del('attendly_token'); user = null; cache.clear();
   showAuth('in');
   if (!silent) toast('Signed out.');
 }
@@ -414,8 +424,9 @@ function startApp() {
     <header class="topbar glass">
       <div class="brand">${DROP}Attendly</div>
       <div class="top-right">
+        <a class="icon-btn" href="#/notifications" aria-label="Notifications">${icon('requests')}</a>
         <button class="icon-btn" id="themeBtn" type="button"></button>
-        <div class="who">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${user.role === 'teacher' ? 'Teacher' : 'Student'}</small></div></div>
+        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${user.role === 'teacher' ? 'Teacher' : 'Student'}</small></div></a>
         <button class="icon-btn" id="outBtn" type="button" aria-label="Sign out">${icon('out')}</button>
       </div>
     </header>
@@ -462,13 +473,15 @@ async function route() {
   closeModal();
   const [, page = 'home', arg] = location.hash.split('/');
   const pages = NAV[user.role].map((n) => n[0]);
-  const cur = pages.includes(page) ? page : 'home';
-  $$('.dock a').forEach((a) => (a.dataset.nav === cur ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
+  const own = (user.role === 'teacher' ? T : S)[page];
+  const cur = pages.includes(page) || own || P[page] ? page : 'home';
+  const dockKey = pages.includes(cur) ? cur : 'home';
+  $$('.dock a').forEach((a) => (a.dataset.nav === dockKey ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   requestAnimationFrame(moveDock);
   const view = $('#view');
-  view.innerHTML = '<div class="loading">Loading…</div>';
+  view.innerHTML = '<div class="loading"><div class="sk short"></div><div class="sk"></div><div class="sk tall"></div></div>';
   try {
-    await (user.role === 'teacher' ? T : S)[cur](view, arg);
+    await (own || P[cur])(view, arg);
   } catch (e) {
     if (!user) return;
     view.innerHTML = `<section class="glass panel empty"><h3>Could not load this page</h3><p>${esc(e.message)}</p><button class="btn" id="retry">Try again</button></section>`;
@@ -492,17 +505,17 @@ T.home = async (view) => {
   const d = await api('GET', '/dashboard');
   const min = user.threshold;
   if (!d.classes.length) {
-    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>
-    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or load a sample class to see how the reports look.</p>
-    <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button><button class="btn soft" id="demo">Load sample class</button></div></section>`;
+    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>${hub()}
+    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or add a practice class to see how reports look.</p>
+    <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button><button class="btn soft" id="demo">Add practice class</button></div></section>`;
     $('#mk').onclick = () => newClassModal();
     $('#demo').onclick = loadDemo;
     return;
   }
   const risk = d.atRisk.length;
   view.innerHTML = `
-  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>
-  <div class="grid home-grid">
+  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>${hub()}
+  <div class="grid home-grid" style="margin-top:18px">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.totals.rate, 'last 30 days', min)}<p class="sub">Minimum you set: ${min}%</p></section>
     <div class="stack">
       <div class="grid cols-3">
@@ -546,7 +559,7 @@ function newClassModal() {
 }
 
 async function loadDemo() {
-  try { await api('POST', '/demo'); toast('Sample class loaded.'); route(); } catch (e) { toast(e.message, true); }
+  try { await api('POST', '/demo'); toast('Practice class added.'); route(); } catch (e) { toast(e.message, true); }
 }
 
 function noticeModal(classes, selected) {
@@ -607,7 +620,7 @@ T.classes = async (view) => {
     <div class="actions"><button class="btn soft" id="pn" ${classes.length ? '' : 'disabled'}>Post notice</button><button class="btn" id="nc">New class</button></div></div>
     ${classes.length ? `<div class="grid cards">${classes.map((c) => `
       <article class="glass class-card">
-        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}${c.isDemo ? ' · sample' : ''}</p></div></div>
+        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}${c.isDemo ? ' · practice' : ''}</p></div></div>
         <div class="code-box"><div><small>Join code</small><code>${esc(c.joinCode)}</code></div><button class="icon-btn" data-copy="${esc(c.joinCode)}" aria-label="Copy join code for ${esc(c.name)}">${icon('copy')}</button></div>
         <div><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="sub">Attendance</span>${chip(c.rate, min)}</div><div class="meter ${band(c.rate, min)}"><i style="width:${c.rate || 0}%"></i></div></div>
         <div class="actions"><a class="btn small" href="#/register/${c.id}">Take attendance</a><button class="btn small soft" data-ck="${c.id}">Check-in code</button><a class="btn small soft" href="#/reports/${c.id}">Report</a><button class="btn small soft" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>
@@ -722,7 +735,7 @@ T.reports = async (view, arg) => {
     <section class="glass toolbar no-print"><div class="field"><label for="rc">Class</label><select id="rc">${classOptions(classes, classId)}</select></div></section>
     <section class="glass panel"><h2>${esc(r.class.name)}</h2><p class="sub">Dashed marks are below ${r.threshold}%</p>
     ${r.rows.length ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Student</th><th>Mobile</th><th class="n">Present</th><th class="n">Late</th><th class="n">Absent</th><th class="n">Leave</th><th class="n">Rate</th></tr></thead><tbody>
-      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${s.rollNo ? esc(s.rollNo) + ' · ' : ''}${esc(s.email.endsWith('@demo.attendly') ? 'sample student' : s.email)}</span></td><td>${esc(s.phone || '-')}</td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
+      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${s.rollNo ? esc(s.rollNo) + ' · ' : ''}${esc(s.email.endsWith('@demo.attendly') ? 'placeholder student' : s.email)}</span></td><td>${esc(s.phone || '-')}</td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
   $('#rc').onchange = (e) => { store.set('attendly_class', e.target.value); location.hash = '#/reports/' + e.target.value; };
   $('#prt').onclick = () => window.print();
   $('#csv').onclick = () => {
@@ -740,7 +753,9 @@ T.reports = async (view, arg) => {
 async function settingsPage(view) {
   const teacher = user.role === 'teacher';
   const act = await api('GET', '/me/activity').catch(() => ({ items: [] }));
-  view.innerHTML = `<div class="page-head"><h1>Settings</h1><p>${esc(user.email)}</p></div>
+  view.innerHTML = `<div class="page-head"><h1>Profile and settings</h1></div>
+  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${teacher ? 'Teacher' : 'Student'} account</p></div></div>
+    <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${teacher ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${teacher ? 'Teacher' : 'Student'}</b></div></div></section>
   <div class="grid cols-2">
     <div class="stack">
       <section class="glass panel"><h2>Profile</h2>
@@ -760,7 +775,7 @@ async function settingsPage(view) {
         <div class="list">${act.items.length ? act.items.map((i) => `<div class="row"><div class="grow"><b>${esc(i.action)}</b><small>${fmtWhen(i.at)}${i.ip ? ' · ' + esc(i.ip) : ''}</small></div></div>`).join('') : '<div class="empty"><p>Nothing yet.</p></div>'}</div>
         <div class="actions" style="margin-top:14px"><button class="btn soft" id="all">Sign out of all devices</button></div></section>
       <section class="glass panel"><h2>Appearance</h2><p class="sub">Two colours, light or inverted.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="th">Switch theme</button></div></section>
-      ${teacher ? `<section class="glass panel"><h2>Sample class</h2><p class="sub">Adds 12 fictional students with five weeks of attendance. Good for a demo. Delete it from Classes when you are done.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="dm">Load sample class</button></div></section>` : ''}
+      ${teacher ? `<section class="glass panel"><h2>Test data</h2><p class="sub">Adds a practice class with 12 placeholder students and five weeks of attendance. Delete it from Classes when you are done.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="dm">Add practice class</button></div></section>` : ''}
       <section class="glass panel"><h2>Session</h2><div class="actions" style="margin-top:12px"><button class="btn soft" id="so">Sign out</button></div></section>
     </div>
   </div>`;
@@ -812,8 +827,8 @@ S.home = async (view) => {
   const d = await api('GET', '/student/summary');
   const mins = d.classes.map((c) => c.threshold);
   const low = d.classes.filter((c) => c.stats.rate !== null && c.stats.rate < c.threshold);
-  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>
-  <div class="grid home-grid">
+  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>${hub()}
+  <div class="grid home-grid" style="margin-top:18px">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.overall.rate, 'all classes', mins.length ? Math.min(...mins) : 75)}
       <p class="sub">${d.overall.present + d.overall.late} attended · ${d.overall.absent} missed · ${d.overall.leave} on leave</p></section>
     <div class="stack">
@@ -886,6 +901,151 @@ S.history = async (view) => {
   draw();
 };
 S.settings = settingsPage;
+
+// ---------- campus pages shared by both roles ----------
+const P = {};
+const DAYS = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const t12 = (t) => { const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`; };
+const isTeacher = () => user.role === 'teacher';
+const dateBox = (d) => { const x = new Date(d + 'T00:00:00'); return `<div class="cal-date"><b>${x.getDate()}</b><small>${x.toLocaleDateString(undefined, { month: 'short' })}</small></div>`; };
+const statusPill = (s) => `<span class="chip ${s === 'approved' || s === 'resolved' ? 'good' : s === 'rejected' ? 'bad' : 'warn'}">${s === 'rejected' ? '<span>Rejected</span>' : s[0].toUpperCase() + s.slice(1)}</span>`;
+const myClassList = async () => (await api('GET', '/classes')).classes;
+
+function formModal(title, sub, fields, submit, onSubmit) {
+  openModal(`<h2>${esc(title)}</h2>${sub ? `<p class="sub">${esc(sub)}</p>` : ''}<form id="fm" style="margin-top:16px">${fields}<p class="error" id="fmErr" role="alert"></p>
+    <div class="actions"><button type="button" class="btn soft" data-cancel>Cancel</button><button class="btn" type="submit">${esc(submit)}</button></div></form>`, (root, close) => {
+    $('#fm', root).onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $('button[type=submit]', root); btn.disabled = true;
+      try { await onSubmit(root); close(); route(); } catch (ex) { $('#fmErr', root).textContent = ex.message; btn.disabled = false; }
+    };
+  });
+}
+const classField = (classes, id = 'fc') => `<div class="field"><label for="${id}">Class</label><select id="${id}">${classOptions(classes)}</select></div>`;
+const needClasses = (view, classes, what) => {
+  if (classes.length) return false;
+  view.innerHTML = `<section class="glass panel empty"><h3>${isTeacher() ? 'Create a class first' : 'Join a class first'}</h3><p>${isTeacher() ? 'Your ' + what + ' are linked to a class.' : 'Your ' + what + ' appear once you are in a class.'}</p><a class="btn" href="#/${isTeacher() ? 'classes' : 'home'}">${isTeacher() ? 'Go to Classes' : 'Go to Home'}</a></section>`;
+  return true;
+};
+
+P.timetable = async (view) => {
+  const [{ items }, classes] = await Promise.all([api('GET', '/timetable'), myClassList()]);
+  const today = ((new Date().getDay() + 6) % 7) + 1;
+  const nowT = new Date().toTimeString().slice(0, 5);
+  const days = [...new Set(items.map((i) => i.day))].sort();
+  view.innerHTML = `<div class="page-head row"><div><h1>Timetable</h1><p>${isTeacher() ? 'Weekly schedule for your classes. Students see it instantly.' : 'Your weekly schedule.'}</p></div>${isTeacher() ? '<button class="btn" id="add">Add a slot</button>' : ''}</div>
+  ${items.length ? `<div class="grid cols-2">${days.map((d) => `<section class="glass panel day-col"><h3>${DAYS[d]}${d === today ? ' · today' : ''}</h3>${items.filter((i) => i.day === d).map((i) => `<div class="slot ${d === today && nowT >= i.start && nowT < i.end ? 'now' : ''}"><time>${t12(i.start)} – ${t12(i.end)}</time><div class="grow" style="flex:1;min-width:0"><b>${esc(i.emoji || '')} ${esc(i.className)}</b>${i.room ? `<small class="sub" style="display:block">Room ${esc(i.room)}</small>` : ''}</div>${isTeacher() ? `<button class="btn small soft" data-del="${i.id}" aria-label="Remove slot">Remove</button>` : ''}</div>`).join('')}</section>`).join('')}</div>`
+    : `<section class="glass panel empty"><h3>No schedule yet</h3><p>${isTeacher() ? 'Add the first slot to publish a timetable.' : 'Your teachers have not added a timetable yet.'}</p></section>`}`;
+  $$('[data-del]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/timetable/' + b.dataset.del); toast('Slot removed.'); route(); } catch (e) { toast(e.message, true); } }));
+  const add = $('#add'); if (add) add.onclick = () => {
+    if (!classes.length) return toast('Create a class first.', true);
+    formModal('Add a slot', 'It repeats every week.', `${classField(classes)}<div class="field"><label for="fd">Day</label><select id="fd">${DAYS.slice(1, 7).map((n, i) => `<option value="${i + 1}" ${i + 1 === today ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="row2"><div class="field"><label for="fs">Starts</label><input id="fs" type="time" value="09:00"></div><div class="field"><label for="fe">Ends</label><input id="fe" type="time" value="10:00"></div></div>
+      <div class="field"><label for="fr">Room</label><input id="fr" type="text" maxlength="30" placeholder="B-12"></div>`, 'Add slot',
+    (r) => api('POST', `/classes/${$('#fc', r).value}/timetable`, { day: +$('#fd', r).value, start: $('#fs', r).value, end: $('#fe', r).value, room: $('#fr', r).value }).then(() => toast('Slot added.')));
+  };
+};
+
+P.calendar = async (view) => {
+  const [ev, ex, classes] = await Promise.all([api('GET', '/events'), api('GET', '/exams'), myClassList()]);
+  const td = todayStr();
+  const all = [...ev.items.map((e) => ({ ...e, type: e.kind })), ...ex.items.map((e) => ({ id: e.id, date: e.date, title: e.title + ' (exam)', className: e.className, type: 'exam', start: e.start }))]
+    .filter((e) => e.date >= td).sort((a, b) => (a.date < b.date ? -1 : 1));
+  view.innerHTML = `<div class="page-head row"><div><h1>Academic calendar</h1><p>Holidays, deadlines, events and exams in one list.</p></div>${isTeacher() ? '<button class="btn" id="add">Add an event</button>' : ''}</div>
+  <section class="glass panel">${all.length ? `<div class="list" style="margin-top:0">${all.map((e) => `<div class="row">${dateBox(e.date)}<div class="grow"><b>${esc(e.title)}</b><small>${esc(e.className)}${e.start ? ' · ' + t12(e.start) : ''}</small></div><span class="kind ${e.type}">${e.type}</span>${isTeacher() && e.type !== 'exam' ? `<button class="btn small soft" data-del="${e.id}">Remove</button>` : ''}</div>`).join('')}</div>` : '<div class="empty"><h3>Nothing coming up</h3><p>New events and exams will appear here.</p></div>'}</section>`;
+  $$('[data-del]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/events/' + b.dataset.del); toast('Event removed.'); route(); } catch (e) { toast(e.message, true); } }));
+  const add = $('#add'); if (add) add.onclick = () => {
+    if (!classes.length) return toast('Create a class first.', true);
+    formModal('Add an event', 'Students in the class will see it.', `${classField(classes)}<div class="field"><label for="ft">Title</label><input id="ft" type="text" maxlength="80" placeholder="Project submission"></div>
+      <div class="row2"><div class="field"><label for="fd">Date</label><input id="fd" type="date" value="${td}"></div><div class="field"><label for="fk">Type</label><select id="fk"><option value="event">Event</option><option value="deadline">Deadline</option><option value="holiday">Holiday</option></select></div></div>`, 'Add event',
+    (r) => api('POST', `/classes/${$('#fc', r).value}/events`, { title: $('#ft', r).value, date: $('#fd', r).value, kind: $('#fk', r).value }).then(() => toast('Event added.')));
+  };
+};
+
+async function marksModal(examId) {
+  const d = await api('GET', `/exams/${examId}/marks`);
+  openModal(`<h2>${esc(d.exam.title)}</h2><p class="sub">Marks out of ${d.exam.maxMarks}. Leave blank if absent.</p>
+    <form id="mf" style="margin-top:14px"><div class="list" style="margin-top:0;max-height:50vh;overflow:auto">${d.students.length ? d.students.map((s) => `<div class="row">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${esc(s.rollNo || '')}</small></div><input class="score-in" type="number" step="0.5" min="0" max="${d.exam.maxMarks}" data-s="${s.id}" value="${s.score ?? ''}" aria-label="Marks for ${esc(s.name)}"></div>`).join('') : '<div class="empty"><p>No students in this class yet.</p></div>'}</div>
+    <p class="error" id="fmErr" role="alert"></p><div class="actions"><button type="button" class="btn soft" data-cancel>Cancel</button><button class="btn" type="submit">Save marks</button></div></form>`, (root, close) => {
+    $('#mf', root).onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('PUT', `/exams/${examId}/marks`, { marks: $$('[data-s]', root).map((i) => ({ studentId: i.dataset.s, score: i.value === '' ? null : Number(i.value) })) }); close(); toast('Marks saved.'); route(); }
+      catch (ex) { $('#fmErr', root).textContent = ex.message; }
+    };
+  });
+}
+
+P.exams = async (view) => {
+  const [{ items }, classes] = await Promise.all([api('GET', '/exams'), myClassList()]);
+  const td = todayStr();
+  const row = (e) => `<div class="row wrap">${dateBox(e.date)}<div class="grow"><b>${esc(e.title)}</b><small>${esc(e.className)}${e.start ? ' · ' + t12(e.start) : ''}${e.room ? ' · Room ' + esc(e.room) : ''} · ${e.maxMarks} marks</small></div>${isTeacher() ? `<button class="btn small" data-marks="${e.id}">${e.graded ? 'Edit marks' : 'Enter marks'}</button><button class="btn small soft" data-del="${e.id}">Delete</button>` : ''}</div>`;
+  const up = items.filter((e) => e.date >= td).reverse(), past = items.filter((e) => e.date < td);
+  view.innerHTML = `<div class="page-head row"><div><h1>${isTeacher() ? 'Exams and marks' : 'Exam schedule'}</h1><p>${isTeacher() ? 'Schedule an exam, then enter marks after it.' : 'Dates, times and rooms for your exams.'}</p></div>${isTeacher() ? '<button class="btn" id="add">Schedule an exam</button>' : '<a class="btn soft" href="#/results">See results</a>'}</div>
+  <h2 class="section-title" style="margin-top:0">Upcoming</h2><section class="glass panel">${up.length ? `<div class="list" style="margin-top:0">${up.map(row).join('')}</div>` : '<div class="empty"><p>No upcoming exams.</p></div>'}</section>
+  ${past.length ? `<h2 class="section-title">Earlier</h2><section class="glass panel"><div class="list" style="margin-top:0">${past.map(row).join('')}</div></section>` : ''}`;
+  $$('[data-marks]', view).forEach((b) => (b.onclick = () => marksModal(b.dataset.marks).catch((e) => toast(e.message, true))));
+  $$('[data-del]', view).forEach((b) => (b.onclick = () => confirmBox('Delete this exam?', 'Its marks will be deleted too.', 'Delete', async () => { try { await api('DELETE', '/exams/' + b.dataset.del); toast('Exam deleted.'); route(); } catch (e) { toast(e.message, true); } })));
+  const add = $('#add'); if (add) add.onclick = () => {
+    if (!classes.length) return toast('Create a class first.', true);
+    formModal('Schedule an exam', '', `${classField(classes)}<div class="field"><label for="ft">Name</label><input id="ft" type="text" maxlength="80" placeholder="Mid-term test"></div>
+      <div class="row2"><div class="field"><label for="fd">Date</label><input id="fd" type="date" value="${td}"></div><div class="field"><label for="fs">Time</label><input id="fs" type="time" value="10:00"></div></div>
+      <div class="row2"><div class="field"><label for="fr">Room</label><input id="fr" type="text" maxlength="30" placeholder="Hall 1"></div><div class="field"><label for="fm2">Maximum marks</label><input id="fm2" type="number" min="1" max="1000" value="50"></div></div>`, 'Schedule',
+    (r) => api('POST', `/classes/${$('#fc', r).value}/exams`, { title: $('#ft', r).value, date: $('#fd', r).value, start: $('#fs', r).value, room: $('#fr', r).value, maxMarks: +$('#fm2', r).value }).then(() => toast('Exam scheduled.')));
+  };
+};
+
+P.results = async (view) => {
+  if (isTeacher()) { location.hash = '#/exams'; return; }
+  const d = await api('GET', '/results');
+  view.innerHTML = `<div class="page-head"><h1>Results</h1><p>Marks your teachers have published.</p></div>
+  ${d.items.length ? `<div class="grid home-grid"><section class="glass panel orb-wrap"><h2>Average</h2><div class="grade" style="font-size:4rem;margin:10px 0">${d.average}%</div><p class="sub">Overall grade ${esc(d.grade)} across ${d.items.length} exam${d.items.length === 1 ? '' : 's'}</p></section>
+  <section class="glass panel"><h2>All results</h2><div class="list">${d.items.map((r) => `<div class="row wrap"><div class="mini">${esc(r.emoji || '📘')}</div><div class="grow"><b>${esc(r.title)}</b><small>${esc(r.className)} · ${fmtShort(r.date)} · ${r.score} / ${r.maxMarks} (${r.percent}%)</small><div class="meter ${band(r.percent, 50)}" style="margin-top:6px"><i style="width:${r.percent}%"></i></div></div><div class="grade">${esc(r.grade)}</div></div>`).join('')}</div></section></div>`
+    : '<section class="glass panel empty"><h3>No results yet</h3><p>They appear here when a teacher enters marks.</p></section>'}`;
+};
+
+P.passes = async (view) => {
+  const [{ items }, classes] = await Promise.all([api('GET', '/passes'), isTeacher() ? [] : myClassList()]);
+  view.innerHTML = `<div class="page-head row"><div><h1>Gate pass and hostel leave</h1><p>${isTeacher() ? 'Approve or reject requests from your students.' : 'Ask your class teacher for permission and track the answer.'}</p></div>${isTeacher() ? '' : '<button class="btn" id="add">New request</button>'}</div>
+  <section class="glass panel">${items.length ? `<div class="list" style="margin-top:0">${items.map((p) => `<div class="row wrap"><div class="grow"><b>${isTeacher() ? esc(p.student) + ' · ' : ''}${esc(p.kind)}</b><small>${fmtShort(p.from)}${p.to !== p.from ? ' to ' + fmtShort(p.to) : ''} · ${esc(p.className)}${p.rollNo ? ' · ' + esc(p.rollNo) : ''}${isTeacher() && p.phone ? ' · ' + esc(p.phone) : ''}</small><small>“${esc(p.reason)}”</small></div>
+      ${p.status === 'pending' ? (isTeacher() ? `<button class="btn small" data-do="approve" data-id="${p.id}">Approve</button><button class="btn small soft" data-do="reject" data-id="${p.id}">Reject</button>` : `${statusPill('pending')}<button class="btn small soft" data-cancel-p="${p.id}">Cancel</button>`) : statusPill(p.status)}</div>`).join('')}</div>` : '<div class="empty"><h3>No requests</h3><p>Nothing here yet.</p></div>'}</section>`;
+  $$('[data-do]', view).forEach((b) => (b.onclick = async () => { try { await api('POST', '/passes/' + b.dataset.id, { decision: b.dataset.do }); toast(b.dataset.do === 'approve' ? 'Approved.' : 'Rejected.'); route(); } catch (e) { toast(e.message, true); } }));
+  $$('[data-cancel-p]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/passes/' + b.dataset.cancelP); toast('Request cancelled.'); route(); } catch (e) { toast(e.message, true); } }));
+  const add = $('#add'); if (add) add.onclick = () => {
+    if (!classes.length) return toast('Join a class first. Your class teacher approves the request.', true);
+    formModal('New request', 'Your class teacher decides.', `${classField(classes)}<div class="field"><label for="fk">Type</label><select id="fk"><option>Gate pass</option><option>Hostel leave</option></select></div>
+      <div class="row2"><div class="field"><label for="ff">From</label><input id="ff" type="date" value="${todayStr()}" min="${todayStr()}"></div><div class="field"><label for="ft">To</label><input id="ft" type="date" value="${todayStr()}" min="${todayStr()}"></div></div>
+      <div class="field"><label for="fr">Reason</label><textarea id="fr" maxlength="200" placeholder="Why do you need it?"></textarea></div>`, 'Send request',
+    (r) => api('POST', `/classes/${$('#fc', r).value}/passes`, { kind: $('#fk', r).value, from: $('#ff', r).value, to: $('#ft', r).value, reason: $('#fr', r).value }).then(() => toast('Request sent.')));
+  };
+};
+
+P.help = async (view) => {
+  const [{ items }, classes] = await Promise.all([api('GET', '/tickets'), isTeacher() ? [] : myClassList()]);
+  view.innerHTML = `<div class="page-head row"><div><h1>Help desk</h1><p>${isTeacher() ? 'Grievances and feedback from your students.' : 'Raise a grievance or send feedback to a teacher.'}</p></div>${isTeacher() ? '' : '<button class="btn" id="add">Write a message</button>'}</div>
+  <section class="glass panel">${items.length ? `<div class="list" style="margin-top:0">${items.map((t) => `<div class="row wrap" style="align-items:flex-start"><div class="grow" style="white-space:normal"><b style="white-space:normal">${esc(t.subject)}</b><small>${t.kind === 'feedback' ? 'Feedback' : 'Grievance'} · ${esc(t.className)}${isTeacher() ? ' · ' + esc(t.student) : ''} · ${fmtWhen(t.at)}</small><small style="margin-top:4px;color:var(--ink)">${esc(t.message)}</small>${t.reply ? `<div class="notice" style="margin-top:8px"><small>Reply</small>${esc(t.reply)}</div>` : ''}</div>${statusPill(t.status)}${isTeacher() && t.status === 'open' ? `<button class="btn small" data-reply="${t.id}">Reply</button>` : ''}</div>`).join('')}</div>` : '<div class="empty"><h3>No messages</h3><p>Nothing here yet.</p></div>'}</section>`;
+  $$('[data-reply]', view).forEach((b) => (b.onclick = () => formModal('Reply', 'The student sees this and the message is marked resolved.', '<div class="field"><label for="fr">Your reply</label><textarea id="fr" maxlength="600"></textarea></div>', 'Send reply',
+    (r) => api('POST', `/tickets/${b.dataset.reply}/reply`, { reply: $('#fr', r).value }).then(() => toast('Reply sent.')))));
+  const add = $('#add'); if (add) add.onclick = () => {
+    if (!classes.length) return toast('Join a class first. Messages go to that class teacher.', true);
+    formModal('Write a message', 'It goes to the teacher of the class you choose.', `${classField(classes)}<div class="field"><label for="fk">Type</label><select id="fk"><option value="grievance">Grievance</option><option value="feedback">Feedback</option></select></div>
+      <div class="field"><label for="fs">Subject</label><input id="fs" type="text" maxlength="80"></div><div class="field"><label for="fmsg">Message</label><textarea id="fmsg" maxlength="800"></textarea></div>`, 'Send',
+    (r) => api('POST', '/tickets', { classId: $('#fc', r).value, kind: $('#fk', r).value, subject: $('#fs', r).value, message: $('#fmsg', r).value }).then(() => toast('Message sent.')));
+  };
+};
+
+P.notifications = async (view) => {
+  const { items } = await api('GET', '/notifications');
+  view.innerHTML = `<div class="page-head"><h1>Notifications</h1><p>Updates from the last 30 days.</p></div>
+  <section class="glass panel">${items.length ? `<div class="list" style="margin-top:0">${items.map((n) => `<a class="row" href="${n.link}" style="text-decoration:none"><div class="grow"><b>${esc(n.title)}</b><small>${esc(n.text)}</small></div><small class="sub">${fmtWhen(n.at)}</small></a>`).join('')}</div>` : '<div class="empty"><h3>You are up to date</h3><p>Nothing new.</p></div>'}</section>`;
+};
+
+function hub() {
+  const t = isTeacher();
+  const tiles = t
+    ? [['register', 'Register', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['requests', 'Leave', 'classes'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['reports', 'Reports', 'reports'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']]
+    : [['history', 'Attendance', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['results', 'Results', 'award'], ['checkin', 'Check in', 'checkin'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']];
+  return `<section class="tiles" aria-label="Everything in one place">${tiles.map(([h, n, i]) => `<a class="glass tile" href="#/${h}">${icon(i)}<span>${n}</span></a>`).join('')}</section>`;
+}
 
 // ---------- boot ----------
 (async function boot() {

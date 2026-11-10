@@ -33,6 +33,21 @@ Status is shown by shape (filled, half, striped, hollow), not by colour, so it a
 
 **Rules:** Present and Late count as attended. Leave is excused and left out of the percentage.
 
+## Campus hub (version 5)
+
+Both roles get one home screen with tiles for everything:
+- **Timetable:** the teacher sets weekly slots with room numbers, students see them, and the class running now is highlighted.
+- **Academic calendar:** holidays, deadlines, events and exams in one list.
+- **Exams and marks:** the teacher schedules an exam, enters marks, and the student sees them under **Results** with percentage and grade (A+ from 90, A from 80, B+ from 70, B from 60, C from 50, D from 40).
+- **Gate pass and hostel leave:** the student asks, the class teacher approves or rejects.
+- **Help desk:** grievances and feedback go to the teacher of the chosen class, who replies.
+- **Notifications:** one list of updates from the last 30 days.
+- **Profile:** name, email, mobile, roll number, password, sessions.
+
+Speed: the background is static, heavy blur is used only on the top bar, dock and pop-ups, pages show placeholders while loading, and repeat page loads reuse data for 20 seconds.
+
+Not included, because they need real institution data or payment services: fees, transport, mess pass.
+
 ## How it is built
 
 | Part | Technology |
@@ -47,11 +62,11 @@ Status is shown by shape (filled, half, striped, hollow), not by colour, so it a
 public/   index.html, style.css, app.js     the website
 api/      [...path].js                      one function for /api/*
 lib/      routes.js  db.js  auth.js  mail.js
-test/     api.test.js                       44 end-to-end checks
+test/     api.test.js                       51 end-to-end checks
 dev.js    local server
 ```
 
-Tables: `users`, `classes`, `enrollments`, `attendance`, `otps`, `activity`, `leave_requests`, `announcements`, `checkins`.
+Tables: `users`, `classes`, `enrollments`, `attendance`, `otps`, `activity`, `leave_requests`, `announcements`, `checkins`, `timetable`, `events`, `exams`, `marks`, `passes`, `tickets`.
 New columns on old databases are added automatically on the first request.
 
 ## Environment variables
@@ -63,7 +78,7 @@ New columns on old databases are added automatically on the first request.
 | `SMTP_USER` | for real email | Your Gmail address |
 | `SMTP_PASS` | for real email | A Google **App Password** (16 letters), not your normal password |
 | `MAIL_FROM` | optional | Sender address, defaults to `SMTP_USER` |
-| `SHOW_OTP` | demo only | `true` shows the code on screen so a demo works without email. Remove it when real email works |
+| `SHOW_OTP` | testing only | `true` shows the code on screen. Leave it unset in real use |
 
 ### Gmail App Password
 1. Google Account > Security > turn on **2-Step Verification**.

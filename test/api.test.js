@@ -157,6 +157,38 @@ async function signup(role, name, email, extra = {}) {
   r = await call('DELETE', `/classes/${C.id}/checkin`, null, T.token);
   r = await call('POST', '/checkin', { code: ck }, S[0].token); assert.equal(r.status, 404); ok('closing the check-in stops the code');
 
+  // ---- campus: timetable, calendar, exams, results, passes, help desk ----
+  r = await call('POST', `/classes/${C.id}/timetable`, { day: 1, start: '09:00', end: '10:00', room: 'B-12' }, S[0].token); assert.equal(r.status, 403);
+  r = await call('POST', `/classes/${C.id}/timetable`, { day: 1, start: '10:00', end: '09:00' }, T.token); assert.equal(r.status, 400);
+  r = await call('POST', `/classes/${C.id}/timetable`, { day: 1, start: '09:00', end: '10:00', room: 'B-12' }, T.token); assert.equal(r.status, 201);
+  r = await call('GET', '/timetable', null, S[0].token); assert.equal(r.data.items.length, 1); assert.equal(r.data.items[0].room, 'B-12');
+  r = await call('GET', '/timetable', null, out.token); assert.equal(r.data.items.length, 0); ok('timetable: teacher sets it, enrolled students see it, outsiders do not');
+  r = await call('POST', `/classes/${C.id}/events`, { title: 'Diwali break', date: nextWeek, kind: 'holiday' }, T.token); assert.equal(r.status, 201);
+  r = await call('POST', `/classes/${C.id}/events`, { title: 'x', date: 'bad' }, T.token); assert.equal(r.status, 400);
+  r = await call('GET', '/events', null, S[0].token); assert.equal(r.data.items[0].kind, 'holiday'); ok('academic calendar events');
+  r = await call('POST', `/classes/${C.id}/exams`, { title: 'Mid-term', date: nextWeek, start: '10:00', room: 'Hall 1', maxMarks: 50 }, T.token); assert.equal(r.status, 201);
+  r = await call('GET', '/exams', null, T.token); const ex = r.data.items[0]; assert.equal(ex.maxMarks, 50);
+  r = await call('PUT', `/exams/${ex.id}/marks`, { marks: [{ studentId: S[0].id, score: 60 }] }, T.token); assert.equal(r.status, 400); ok('marks above the maximum are rejected');
+  r = await call('PUT', `/exams/${ex.id}/marks`, { marks: [{ studentId: S[0].id, score: 42 }, { studentId: out.id, score: 40 }] }, T.token); assert.equal(r.status, 200);
+  r = await call('PUT', `/exams/${ex.id}/marks`, { marks: [{ studentId: S[0].id, score: 42 }] }, T2.token); assert.equal(r.status, 404);
+  r = await call('GET', '/results', null, S[0].token); assert.equal(r.data.items[0].percent, 84); assert.equal(r.data.items[0].grade, 'A'); assert.equal(r.data.average, 84);
+  r = await call('GET', '/results', null, out.token); assert.equal(r.data.items.length, 0); ok('exam marks, results and grades; only enrolled students; other teacher blocked');
+  r = await call('POST', `/classes/${C.id}/passes`, { kind: 'Gate pass', from: today, to: nextWeek, reason: 'Family function' }, S[0].token); assert.equal(r.status, 201);
+  r = await call('POST', `/classes/${C.id}/passes`, { kind: 'Gate pass', from: nextWeek, to: today, reason: 'bad dates' }, S[0].token); assert.equal(r.status, 400);
+  r = await call('POST', `/classes/${C.id}/passes`, { kind: 'Gate pass', from: today, to: today, reason: 'No' }, out.token); assert.equal(r.status, 404);
+  r = await call('GET', '/passes', null, T.token); const ps = r.data.items[0]; assert.equal(ps.status, 'pending');
+  r = await call('POST', '/passes/' + ps.id, { decision: 'approve' }, T2.token); assert.equal(r.status, 404);
+  r = await call('POST', '/passes/' + ps.id, { decision: 'approve' }, T.token); assert.equal(r.status, 200);
+  r = await call('GET', '/passes', null, S[0].token); assert.equal(r.data.items[0].status, 'approved'); ok('gate pass request and approval');
+  r = await call('POST', '/tickets', { kind: 'grievance', classId: C.id, subject: 'Projector broken', message: 'The projector in room B-12 has not worked for a week.' }, S[0].token); assert.equal(r.status, 201);
+  r = await call('POST', '/tickets', { kind: 'feedback', classId: C.id, subject: 'Hi', message: 'short' }, S[0].token); assert.equal(r.status, 400);
+  r = await call('GET', '/tickets', null, T.token); const tk = r.data.items[0];
+  r = await call('POST', `/tickets/${tk.id}/reply`, { reply: 'We will fix it this week.' }, S[0].token); assert.equal(r.status, 403);
+  r = await call('POST', `/tickets/${tk.id}/reply`, { reply: 'We will fix it this week.' }, T.token); assert.equal(r.status, 200);
+  r = await call('GET', '/tickets', null, S[0].token); assert.equal(r.data.items[0].status, 'resolved'); ok('help desk: student writes, teacher replies');
+  r = await call('GET', '/notifications', null, S[0].token); assert.ok(r.data.items.length >= 3); ok('notifications centre');
+  r = await call('DELETE', '/exams/' + ex.id, null, T.token); assert.equal(r.status, 200);
+
   // ---- settings, demo, cleanup ----
   r = await call('PATCH', '/me', { threshold: 150 }, T.token); assert.equal(r.status, 400);
   r = await call('PATCH', '/me', { threshold: 60, phone: '+919812345678' }, T.token); assert.equal(r.data.user.threshold, 60); assert.equal(r.data.user.phone, '+919812345678'); ok('profile settings');
