@@ -33,6 +33,23 @@ Status is shown by shape (filled, half, striped, hollow), not by colour, so it a
 
 **Rules:** Present and Late count as attended. Leave is excused and left out of the percentage.
 
+## Colleges and the admin (version 6)
+
+- A **platform admin** adds colleges. Anyone whose email is listed in `ADMIN_EMAILS` becomes admin after email verification. Nobody can choose the admin role on the sign-up form.
+- Every teacher and student **must pick a college** when signing up.
+- **Teachers need the admin's approval** before they can create classes.
+- A student can only join classes from **their own college**.
+- The admin panel has **Overview** (totals and per-college counts), **Colleges** (add, edit, disable, delete) and **People** (search, approve, assign a college, disable or enable).
+- Disabled users are signed out at once.
+
+## Install as an app (PWA)
+
+Attendly is an installable web app: home-screen icon, full-screen window, fast start, and the screen shell opens even when offline (data needs the internet).
+- **Android (Chrome):** open the site, tap **Install app** on the Home screen, or menu (⋮) then **Install app**.
+- **iPhone (Safari):** Share button, then **Add to Home Screen**.
+- **Computer (Chrome or Edge):** install icon in the address bar.
+- For a Play Store file (APK or AAB), wrap the live site with PWABuilder (pwabuilder.com) after it is deployed.
+
 ## Campus hub (version 5)
 
 Both roles get one home screen with tiles for everything:
@@ -60,13 +77,13 @@ Not included, because they need real institution data or payment services: fees,
 
 ```
 public/   index.html, style.css, app.js     the website
-api/      [...path].js                      one function for /api/*
+api/      [...path].js, index.js            one function for /api/* (vercel.json rewrites to index.js)
 lib/      routes.js  db.js  auth.js  mail.js
-test/     api.test.js                       51 end-to-end checks
+test/     api.test.js                       61 end-to-end checks
 dev.js    local server
 ```
 
-Tables: `users`, `classes`, `enrollments`, `attendance`, `otps`, `activity`, `leave_requests`, `announcements`, `checkins`, `timetable`, `events`, `exams`, `marks`, `passes`, `tickets`.
+Tables: `users`, `classes`, `enrollments`, `attendance`, `otps`, `activity`, `leave_requests`, `announcements`, `checkins`, `colleges`, `timetable`, `events`, `exams`, `marks`, `passes`, `tickets`.
 New columns on old databases are added automatically on the first request.
 
 ## Environment variables
@@ -78,6 +95,7 @@ New columns on old databases are added automatically on the first request.
 | `SMTP_USER` | for real email | Your Gmail address |
 | `SMTP_PASS` | for real email | A Google **App Password** (16 letters), not your normal password |
 | `MAIL_FROM` | optional | Sender address, defaults to `SMTP_USER` |
+| `ADMIN_EMAILS` | yes, once | Your email (several allowed, comma separated). That person becomes the platform admin |
 | `SHOW_OTP` | testing only | `true` shows the code on screen. Leave it unset in real use |
 
 ### Gmail App Password

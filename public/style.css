@@ -370,3 +370,12 @@ tbody tr:last-child td { border-bottom: 0; }
 .who { text-decoration: none; }
 .page-head.row { background: none; padding: 0; border-radius: 0; }
 .dock a span { white-space: nowrap; }
+.who small { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+/* installed app: respect phone notches and the home bar */
+.dock { bottom: calc(18px + env(safe-area-inset-bottom)); }
+.shell { padding-top: calc(12px + env(safe-area-inset-top)); }
+.topbar { top: calc(12px + env(safe-area-inset-top)); }
+@media (display-mode: standalone) { body { overscroll-behavior-y: none; user-select: none; -webkit-user-select: none; } input, textarea { user-select: text; -webkit-user-select: text; } }
+.install { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.install p { flex: 1; min-width: 200px; }

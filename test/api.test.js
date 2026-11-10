@@ -10,13 +10,16 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'attendly-'));
 process.env.SQLITE_FILE = path.join(tmp, 't.db');
 process.env.MAIL_STUB = '1';
 process.env.SHOW_OTP = 'true';
+process.env.ADMIN_EMAILS = 'boss@campus.edu';
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 const api = require('../api/[...path].js');
 
 const server = http.createServer(api);
 let base;
+let COLLEGE = null, ADMIN = null;
 async function call(method, url, body, token) {
+  if (url === '/auth/register' && body && body.collegeId === undefined && COLLEGE) body = { ...body, collegeId: COLLEGE };
   const r = await fetch(base + url, {
     method,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
@@ -34,7 +37,15 @@ async function signup(role, name, email, extra = {}) {
   assert.equal(r.data.pending, true);
   r = await call('POST', '/auth/verify', { email, code: r.data.devOtp });
   assert.equal(r.status, 200, 'verify ' + JSON.stringify(r.data));
+  if (role === 'teacher' && ADMIN) { const u = await call('GET', '/admin/users?q=' + encodeURIComponent(email), null, ADMIN); await call('POST', '/admin/users/' + u.data.items[0].id, { action: 'approve' }, ADMIN); }
   return { token: r.data.token, id: r.data.user.id, email };
+}
+
+async function signupRaw(role, name, email, college) {
+  let r = await call('POST', '/auth/register', { name, email, phone: '9876543210', password: 'Strong#Pass1', role, ...(college ? { collegeId: college } : {}) });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  r = await call('POST', '/auth/verify', { email, code: r.data.devOtp });
+  return { token: r.data.token, id: r.data.user.id };
 }
 
 (async () => {
@@ -43,9 +54,22 @@ async function signup(role, name, email, extra = {}) {
   let n = 0;
   const ok = (name) => console.log('  ok', ++n, name);
 
+  // ---- admin and colleges ----
+  let r = await call('POST', '/auth/register', { name: 'Site Admin', email: 'boss@campus.edu', phone: '9876500000', password: 'Strong#Pass1', role: 'student' });
+  assert.equal(r.status, 201);
+  r = await call('POST', '/auth/verify', { email: 'boss@campus.edu', code: r.data.devOtp });
+  assert.equal(r.data.user.role, 'admin'); ADMIN = r.data.token; ok('admin email becomes admin automatically, role cannot be chosen');
+  r = await call('GET', '/colleges'); assert.equal(r.data.colleges.length, 0);
+  r = await call('POST', '/auth/register', { name: 'Early Bird', email: 'early@x.edu', phone: '9876543210', password: 'Strong#Pass1', role: 'student' });
+  assert.equal(r.status, 400); ok('signup needs a college that exists');
+  r = await call('POST', '/admin/colleges', { name: 'Parul University', city: 'Vadodara', code: 'PU' }, ADMIN); assert.equal(r.status, 201);
+  r = await call('POST', '/admin/colleges', { name: 'parul university' }, ADMIN); assert.equal(r.status, 409);
+  r = await call('POST', '/admin/colleges', { name: 'Other Institute', city: 'Pune' }, ADMIN); assert.equal(r.status, 201);
+  r = await call('GET', '/colleges'); COLLEGE = r.data.colleges.find((c) => c.name === 'Parul University').id; const OTHER = r.data.colleges.find((c) => c.name === 'Other Institute').id;
+  assert.equal(r.data.colleges.length, 2); ok('admin adds colleges; duplicates blocked; public list works');
   // ---- sign up rules ----
   const good = { name: 'Prof Rao', email: 'Rao@School.edu', phone: '98765 43210', role: 'teacher' };
-  let r = await call('POST', '/auth/register', { ...good, password: 'short1' }); assert.equal(r.status, 400); ok('short password rejected');
+  r = await call('POST', '/auth/register', { ...good, password: 'short1' }); assert.equal(r.status, 400); ok('short password rejected');
   r = await call('POST', '/auth/register', { ...good, password: 'onlyletters' }); assert.equal(r.status, 400); ok('password without a number rejected');
   r = await call('POST', '/auth/register', { ...good, password: 'Password123' }); assert.equal(r.status, 400); ok('common password rejected');
   r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1', phone: '' }); assert.equal(r.status, 400); ok('phone number is required');
@@ -54,7 +78,7 @@ async function signup(role, name, email, extra = {}) {
   // ---- email code (OTP) ----
   r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1' });
   assert.equal(r.status, 201); assert.equal(r.data.pending, true); assert.ok(!r.data.token); const code1 = r.data.devOtp; ok('register sends code, gives no token yet');
-  assert.ok(global.__mailbox.length >= 1 && global.__mailbox[0].to === 'rao@school.edu' && global.__mailbox[0].text.includes(code1)); ok('email contains the code and goes to the typed address');
+  assert.ok(global.__mailbox.length >= 1 && global.__mailbox[global.__mailbox.length - 1].to === 'rao@school.edu' && global.__mailbox[global.__mailbox.length - 1].text.includes(code1)); ok('email contains the code and goes to the typed address');
   r = await call('POST', '/auth/register', { ...good, password: 'Strong#Pass1' }); assert.equal(r.status, 429); ok('asking for a second code within a minute is blocked');
   r = await call('POST', '/auth/login', { email: 'rao@school.edu', password: 'Strong#Pass1' });
   assert.equal(r.status, 403); assert.equal(r.data.needsVerify, true); ok('cannot sign in before email is verified');
@@ -188,6 +212,25 @@ async function signup(role, name, email, extra = {}) {
   r = await call('GET', '/tickets', null, S[0].token); assert.equal(r.data.items[0].status, 'resolved'); ok('help desk: student writes, teacher replies');
   r = await call('GET', '/notifications', null, S[0].token); assert.ok(r.data.items.length >= 3); ok('notifications centre');
   r = await call('DELETE', '/exams/' + ex.id, null, T.token); assert.equal(r.status, 200);
+
+  // ---- colleges: approval, isolation, admin powers ----
+  const newT = await signupRaw('teacher', 'Dr New', 'new@x.edu');
+  r = await call('POST', '/classes', { name: 'Blocked', code: 'B1' }, newT.token); assert.equal(r.status, 403); ok('teacher cannot create classes before admin approval');
+  r = await call('GET', '/admin/overview', null, ADMIN); assert.equal(r.data.totals.pending, 1);
+  r = await call('GET', '/admin/overview', null, T.token); assert.equal(r.status, 403); ok('only admin can open admin routes');
+  r = await call('GET', '/admin/users?status=pending', null, ADMIN); r = await call('POST', '/admin/users/' + r.data.items[0].id, { action: 'approve' }, ADMIN); assert.equal(r.status, 200);
+  r = await call('POST', '/classes', { name: 'Allowed', code: 'A1' }, newT.token); assert.equal(r.status, 201); ok('admin approves teacher, then they can create classes');
+  const cOther = r.data.class ? r.data.class : r.data;
+  const stOther = await signupRaw('student', 'Far Away', 'far@x.edu', OTHER);
+  r = await call('POST', '/classes/join', { code: (cOther.joinCode || cOther.join_code) }, stOther.token); assert.equal(r.status, 403); ok('student of another college cannot join the class');
+  r = await call('GET', '/admin/users?q=far@x.edu', null, ADMIN); const farId = r.data.items[0].id;
+  r = await call('POST', '/admin/users/' + farId, { action: 'disable' }, ADMIN); assert.equal(r.status, 200);
+  r = await call('GET', '/me', null, stOther.token); assert.equal(r.status, 401);
+  r = await call('POST', '/auth/login', { email: 'far@x.edu', password: 'Strong#Pass1' }); assert.equal(r.status, 403); ok('disabled user is signed out and cannot sign in');
+  r = await call('POST', '/admin/users/' + farId, { action: 'enable' }, ADMIN); r = await call('POST', '/admin/users/' + farId, { action: 'assign', collegeId: COLLEGE }, ADMIN); assert.equal(r.status, 200);
+  r = await call('DELETE', '/admin/colleges/' + COLLEGE, null, ADMIN); assert.equal(r.status, 409); ok('college with people cannot be deleted');
+  r = await call('GET', '/admin/overview', null, ADMIN); assert.ok(r.data.colleges.find((c) => c.name === 'Parul University').teachers >= 1);
+  r = await call('GET', '/me', null, T.token); assert.equal(r.data.user.college, 'Parul University'); ok('profile carries the college name');
 
   // ---- settings, demo, cleanup ----
   r = await call('PATCH', '/me', { threshold: 150 }, T.token); assert.equal(r.status, 400);

@@ -305,6 +305,7 @@ function authCard(mode, d) {
       <div class="field"><label id="rl">I am a</label><div class="roles" role="radiogroup" aria-labelledby="rl">
         <label class="role"><input type="radio" name="role" value="teacher" checked><span>Teacher</span></label>
         <label class="role"><input type="radio" name="role" value="student"><span>Student</span></label></div></div>
+      <div class="field"><label for="college">College or university</label><select id="college"><option value="">Loading…</option></select><p class="hint" id="colHint"></p></div>
       <div class="field"><label for="name">Full name</label><input id="name" type="text" autocomplete="name" maxlength="60"></div>
       <div class="row2">
         <div class="field"><label for="phone">Mobile number</label><input id="phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="16" placeholder="98765 43210"></div>
@@ -315,11 +316,18 @@ function authCard(mode, d) {
       <p class="error" id="err" role="alert"></p><button class="btn wide" id="go" type="submit">Send verification code</button></form>`;
     $('#tabIn').onclick = () => authCard('in', {});
     bindPw(card);
+    let colCount = 0;
+    api('GET', '/colleges').then(({ colleges }) => {
+      const sel = $('#college'); if (!sel) return; colCount = colleges.length;
+      sel.innerHTML = colleges.length ? '<option value="">Choose your college</option>' + colleges.map((c) => `<option value="${c.id}">${esc(c.name)}${c.city ? ', ' + esc(c.city) : ''}</option>`).join('') : '<option value="">No college added yet</option>';
+      $('#colHint').textContent = colleges.length ? 'Teachers are approved by the college admin before they can create classes.' : 'No college is set up yet. Only the platform admin can register now.';
+    }).catch(() => { const h = $('#colHint'); if (h) h.textContent = 'Could not load the college list. Check your connection.'; });
     $$('input[name="role"]', card).forEach((r) => (r.onchange = () => $('#rollBox').classList.toggle('hidden', r.value !== 'student' || !r.checked)));
     $('#f').onsubmit = async (e) => {
       e.preventDefault();
       const err = $('#err'), btn = $('#go'); err.textContent = '';
-      const body = { role: $('input[name="role"]:checked').value, name: $('#name').value, phone: $('#phone').value, rollNo: $('#roll').value, email: $('#email').value.trim(), password: $('#pass').value };
+      const body = { role: $('input[name="role"]:checked').value, name: $('#name').value, phone: $('#phone').value, rollNo: $('#roll').value, collegeId: $('#college').value, email: $('#email').value.trim(), password: $('#pass').value };
+      if (colCount && !body.collegeId) { err.textContent = 'Choose your college or university.'; return; }
       if (body.name.trim().length < 2) { err.textContent = 'Enter your full name.'; return; }
       if (!/^\+?\d{10,14}$/.test(body.phone.replace(/[\s\-()]/g, ''))) { err.textContent = 'Enter a valid mobile number, 10 to 14 digits.'; return; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email)) { err.textContent = 'Enter a valid email address.'; return; }
@@ -414,7 +422,9 @@ function signOut(silent) {
 const NAV = {
   teacher: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['register', 'Register', 'register'], ['requests', 'Requests', 'requests'], ['reports', 'Reports', 'reports'], ['settings', 'Settings', 'settings']],
   student: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['checkin', 'Check in', 'checkin'], ['history', 'History', 'history'], ['settings', 'Settings', 'settings']],
+  admin: [['home', 'Overview', 'home'], ['colleges', 'Colleges', 'classes'], ['people', 'People', 'user'], ['settings', 'Settings', 'settings']],
 };
+const ROLE_NAME = { teacher: 'Teacher', student: 'Student', admin: 'Admin' };
 
 function startApp() {
   clearInterval(authTimer);
@@ -424,9 +434,9 @@ function startApp() {
     <header class="topbar glass">
       <div class="brand">${DROP}Attendly</div>
       <div class="top-right">
-        <a class="icon-btn" href="#/notifications" aria-label="Notifications">${icon('requests')}</a>
+        ${user.role === 'admin' ? '' : `<a class="icon-btn" href="#/notifications" aria-label="Notifications">${icon('requests')}</a>`}
         <button class="icon-btn" id="themeBtn" type="button"></button>
-        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${user.role === 'teacher' ? 'Teacher' : 'Student'}</small></div></a>
+        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${ROLE_NAME[user.role]}${user.college ? ' · ' + esc(user.college) : ''}</small></div></a>
         <button class="icon-btn" id="outBtn" type="button" aria-label="Sign out">${icon('out')}</button>
       </div>
     </header>
@@ -473,15 +483,17 @@ async function route() {
   closeModal();
   const [, page = 'home', arg] = location.hash.split('/');
   const pages = NAV[user.role].map((n) => n[0]);
-  const own = (user.role === 'teacher' ? T : S)[page];
-  const cur = pages.includes(page) || own || P[page] ? page : 'home';
+  const own = { teacher: T, student: S, admin: A }[user.role][page];
+  const shared = user.role !== 'admin' && P[page];
+  const cur = pages.includes(page) || own || shared ? page : 'home';
   const dockKey = pages.includes(cur) ? cur : 'home';
   $$('.dock a').forEach((a) => (a.dataset.nav === dockKey ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   requestAnimationFrame(moveDock);
   const view = $('#view');
   view.innerHTML = '<div class="loading"><div class="sk short"></div><div class="sk"></div><div class="sk tall"></div></div>';
   try {
-    await (own || P[cur])(view, arg);
+    await (own || (user.role !== 'admin' && P[cur]) || { teacher: T, student: S, admin: A }[user.role].home)(view, arg);
+    bindInstall();
   } catch (e) {
     if (!user) return;
     view.innerHTML = `<section class="glass panel empty"><h3>Could not load this page</h3><p>${esc(e.message)}</p><button class="btn" id="retry">Try again</button></section>`;
@@ -502,10 +514,12 @@ const classOptions = (classes, sel) => classes.map((c) => `<option value="${c.id
 const T = {};
 
 T.home = async (view) => {
+  if (!user.approved) { try { user = (await api('GET', '/me')).user; } catch { /* keep */ } }
+  const wait = user.approved ? '' : '<section class="glass panel notice" style="margin-bottom:18px"><b>Waiting for approval</b><p class="sub">Your college admin must approve your teacher account before you can create classes. You will see the change here.</p></section>';
   const d = await api('GET', '/dashboard');
   const min = user.threshold;
   if (!d.classes.length) {
-    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>${hub()}
+    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>${wait}${installCard(true)}${hub()}
     <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or add a practice class to see how reports look.</p>
     <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button><button class="btn soft" id="demo">Add practice class</button></div></section>`;
     $('#mk').onclick = () => newClassModal();
@@ -514,7 +528,7 @@ T.home = async (view) => {
   }
   const risk = d.atRisk.length;
   view.innerHTML = `
-  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>${hub()}
+  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>${wait}${installCard(true)}${hub()}
   <div class="grid home-grid" style="margin-top:18px">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.totals.rate, 'last 30 days', min)}<p class="sub">Minimum you set: ${min}%</p></section>
     <div class="stack">
@@ -752,17 +766,19 @@ T.reports = async (view, arg) => {
 // ---------- settings (both roles) ----------
 async function settingsPage(view) {
   const teacher = user.role === 'teacher';
+  const student = user.role === 'student';
   const act = await api('GET', '/me/activity').catch(() => ({ items: [] }));
   view.innerHTML = `<div class="page-head"><h1>Profile and settings</h1></div>
-  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${teacher ? 'Teacher' : 'Student'} account</p></div></div>
-    <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${teacher ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${teacher ? 'Teacher' : 'Student'}</b></div></div></section>
+  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${ROLE_NAME[user.role]} account</p></div></div>
+    <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${!student ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${ROLE_NAME[user.role]}</b></div>${user.role === 'admin' ? '' : `<div><small>College</small><b>${esc(user.college || 'Not set. Ask your admin.')}</b></div>`}</div></section>
+  ${installCard(false)}
   <div class="grid cols-2">
     <div class="stack">
       <section class="glass panel"><h2>Profile</h2>
         <form id="pf" style="margin-top:14px">
           <div class="field"><label for="sName">Full name</label><input id="sName" type="text" maxlength="60" value="${esc(user.name)}"></div>
           <div class="row2"><div class="field"><label for="sPhone">Mobile number</label><input id="sPhone" type="tel" maxlength="16" value="${esc(user.phone || '')}"></div>
-          ${teacher ? '' : `<div class="field"><label for="sRoll">Roll number</label><input id="sRoll" type="text" maxlength="30" value="${esc(user.rollNo || '')}"></div>`}</div>
+          ${!student ? '' : `<div class="field"><label for="sRoll">Roll number</label><input id="sRoll" type="text" maxlength="30" value="${esc(user.rollNo || '')}"></div>`}</div>
           ${teacher ? `<div class="field"><label for="sMin">Minimum attendance: <b id="minVal">${user.threshold}%</b></label><input id="sMin" type="range" min="40" max="100" step="5" value="${user.threshold}"><p class="hint">Students below this show up under Needs attention.</p></div>` : ''}
           <p class="error" id="pfErr" role="alert"></p><button class="btn" type="submit">Save changes</button>
         </form></section>
@@ -827,7 +843,7 @@ S.home = async (view) => {
   const d = await api('GET', '/student/summary');
   const mins = d.classes.map((c) => c.threshold);
   const low = d.classes.filter((c) => c.stats.rate !== null && c.stats.rate < c.threshold);
-  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>${hub()}
+  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>${installCard(true)}${hub()}
   <div class="grid home-grid" style="margin-top:18px">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.overall.rate, 'all classes', mins.length ? Math.min(...mins) : 75)}
       <p class="sub">${d.overall.present + d.overall.late} attended · ${d.overall.absent} missed · ${d.overall.leave} on leave</p></section>
@@ -1046,6 +1062,86 @@ function hub() {
     : [['history', 'Attendance', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['results', 'Results', 'award'], ['checkin', 'Check in', 'checkin'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']];
   return `<section class="tiles" aria-label="Everything in one place">${tiles.map(([h, n, i]) => `<a class="glass tile" href="#/${h}">${icon(i)}<span>${n}</span></a>`).join('')}</section>`;
 }
+
+// ---------- admin pages ----------
+const A = {};
+const adminFilter = { role: '', collegeId: '', status: '', q: '' };
+
+A.home = async (view) => {
+  const d = await api('GET', '/admin/overview');
+  const t = d.totals;
+  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Platform admin. You add colleges and approve teachers.</p></div>
+  <div class="grid cols-3" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    <div class="glass stat"><b>${t.colleges}</b><span>Colleges</span></div><div class="glass stat"><b>${t.teachers}</b><span>Teachers</span></div>
+    <div class="glass stat"><b>${t.students}</b><span>Students</span></div><div class="glass stat"><b>${t.classes}</b><span>Classes</span></div></div>
+  ${t.pending ? `<button class="glass stat alert" id="pend" style="margin-top:18px;width:100%;text-align:left;cursor:pointer"><b>${t.pending}</b><span>Teacher${t.pending === 1 ? '' : 's'} waiting for approval. Open People.</span></button>` : ''}
+  ${t.unassigned ? `<p class="sub" style="margin-top:14px">${t.unassigned} older account${t.unassigned === 1 ? ' has' : 's have'} no college yet. Open People and assign one.</p>` : ''}
+  <h2 class="section-title">Colleges</h2>
+  <section class="glass panel">${d.colleges.length ? `<div class="table-wrap"><table><thead><tr><th>College</th><th class="n">Teachers</th><th class="n">Students</th><th class="n">Classes</th></tr></thead><tbody>${d.colleges.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="sub">${esc([c.code, c.city].filter(Boolean).join(' · ') || '')}${c.active ? '' : ' · disabled'}</span></td><td class="n">${c.teachers}</td><td class="n">${c.students}</td><td class="n">${c.classes}</td></tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty"><h3>Add your first college</h3><p>People choose their college when they sign up, so add it before anyone registers.</p><a class="btn" href="#/colleges">Add a college</a></div>'}</section>`;
+  const pend = $('#pend'); if (pend) pend.onclick = () => { Object.assign(adminFilter, { role: '', collegeId: '', status: 'pending', q: '' }); location.hash = '#/people'; };
+};
+
+function collegeModal(c) {
+  formModal(c ? 'Edit college' : 'Add a college', 'People pick it from a list when they sign up.', `<div class="field"><label for="cn">Full name</label><input id="cn" type="text" maxlength="100" value="${esc(c ? c.name : '')}" placeholder="Parul University"></div>
+    <div class="row2"><div class="field"><label for="cc">City</label><input id="cc" type="text" maxlength="60" value="${esc(c ? c.city : '')}" placeholder="Vadodara"></div><div class="field"><label for="ck">Short code</label><input id="ck" type="text" maxlength="20" value="${esc(c ? c.code : '')}" placeholder="PU"></div></div>`, c ? 'Save' : 'Add college',
+  (r) => (c ? api('PATCH', '/admin/colleges/' + c.id, { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value }) : api('POST', '/admin/colleges', { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value })).then(() => toast(c ? 'College saved.' : 'College added.')));
+}
+
+A.colleges = async (view) => {
+  const d = await api('GET', '/admin/overview');
+  view.innerHTML = `<div class="page-head row"><div><h1>Colleges</h1><p>Every teacher and student belongs to one college.</p></div><button class="btn" id="add">Add a college</button></div>
+  <section class="glass panel">${d.colleges.length ? `<div class="list" style="margin-top:0">${d.colleges.map((c) => `<div class="row wrap"><div class="grow"><b>${esc(c.name)}</b><small>${esc([c.code, c.city].filter(Boolean).join(' · '))}${[c.code, c.city].some(Boolean) ? ' · ' : ''}${c.teachers} teachers · ${c.students} students · ${c.classes} classes</small></div>
+    <span class="chip ${c.active ? 'good' : 'none'}">${c.active ? 'Active' : 'Disabled'}</span><button class="btn small soft" data-edit="${c.id}">Edit</button><button class="btn small soft" data-tog="${c.id}">${c.active ? 'Disable' : 'Enable'}</button><button class="btn small danger" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>`).join('')}</div>` : '<div class="empty"><h3>No colleges yet</h3><p>Add the first one.</p></div>'}</section>`;
+  $('#add').onclick = () => collegeModal(null);
+  $$('[data-edit]', view).forEach((b) => (b.onclick = () => collegeModal(d.colleges.find((c) => c.id === b.dataset.edit))));
+  $$('[data-tog]', view).forEach((b) => (b.onclick = async () => { const c = d.colleges.find((x) => x.id === b.dataset.tog); try { await api('PATCH', '/admin/colleges/' + c.id, { active: !c.active }); toast(c.active ? 'College disabled.' : 'College enabled.'); route(); } catch (e) { toast(e.message, true); } }));
+  $$('[data-del]', view).forEach((b) => (b.onclick = () => confirmBox('Delete ' + b.dataset.name + '?', 'This only works if nobody belongs to it.', 'Delete', async () => { try { await api('DELETE', '/admin/colleges/' + b.dataset.del); toast('College deleted.'); route(); } catch (e) { toast(e.message, true); } })));
+};
+
+A.people = async (view) => {
+  const [cols, list] = await Promise.all([api('GET', '/admin/overview'), api('GET', '/admin/users?' + new URLSearchParams(Object.entries(adminFilter).filter(([, v]) => v)))]);
+  const opt = (v, n, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${esc(n)}</option>`;
+  view.innerHTML = `<div class="page-head"><h1>People</h1><p>Approve teachers, assign colleges, and disable accounts.</p></div>
+  <section class="glass panel"><div class="row2" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    <div class="field"><label for="fs">Search</label><input id="fs" type="search" placeholder="Name or email" value="${esc(adminFilter.q)}"></div>
+    <div class="field"><label for="fr">Role</label><select id="fr">${opt('', 'Everyone', adminFilter.role)}${opt('teacher', 'Teachers', adminFilter.role)}${opt('student', 'Students', adminFilter.role)}</select></div>
+    <div class="field"><label for="fc">College</label><select id="fc">${opt('', 'All colleges', adminFilter.collegeId)}${opt('none', 'No college', adminFilter.collegeId)}${cols.colleges.map((c) => opt(c.id, c.name, adminFilter.collegeId)).join('')}</select></div>
+    <div class="field"><label for="fst">Status</label><select id="fst">${opt('', 'Any', adminFilter.status)}${opt('pending', 'Waiting for approval', adminFilter.status)}${opt('disabled', 'Disabled', adminFilter.status)}</select></div></div>
+    ${list.items.length ? `<div class="list">${list.items.map((u) => `<div class="row wrap"><div class="avatar" aria-hidden="true">${esc(initials(u.name))}</div><div class="grow"><b>${esc(u.name)} <span class="kind">${u.role}</span></b><small>${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.rollNo ? ' · ' + esc(u.rollNo) : ''}</small><small>${esc(u.college || 'No college')}</small></div>
+      ${u.disabled ? '<span class="chip none">Disabled</span>' : u.role === 'teacher' && !u.approved ? '<span class="chip warn">Waiting</span>' : '<span class="chip good">Active</span>'}
+      ${u.role === 'teacher' && !u.approved && !u.disabled ? `<button class="btn small" data-act="approve" data-id="${u.id}">Approve</button>` : ''}
+      <button class="btn small soft" data-assign="${u.id}">College</button>
+      <button class="btn small soft" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Enable' : 'Disable'}</button></div>`).join('')}</div>` : '<div class="empty"><h3>No one matches</h3><p>Try other filters.</p></div>'}</section>`;
+  const set = (k) => (e) => { adminFilter[k] = e.target.value; route(); };
+  $('#fr').onchange = set('role'); $('#fc').onchange = set('collegeId'); $('#fst').onchange = set('status');
+  let t; $('#fs').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { adminFilter.q = e.target.value; route(); }, 400); };
+  $$('[data-act]', view).forEach((b) => (b.onclick = async () => { try { await api('POST', '/admin/users/' + b.dataset.id, { action: b.dataset.act }); toast('Done.'); route(); } catch (e) { toast(e.message, true); } }));
+  $$('[data-assign]', view).forEach((b) => (b.onclick = () => formModal('Set college', 'Moves this person to the college you pick.', `<div class="field"><label for="ac">College</label><select id="ac">${cols.colleges.filter((c) => c.active).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>`, 'Save',
+    (r) => api('POST', '/admin/users/' + b.dataset.assign, { action: 'assign', collegeId: $('#ac', r).value }).then(() => toast('College updated.')))));
+  if (adminFilter.q) { const f = $('#fs'); f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+};
+A.settings = settingsPage;
+
+// ---------- install as an app ----------
+let installEvt = null;
+const standalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (user && /^#\/(home|settings)?$/.test(location.hash)) route(); });
+window.addEventListener('appinstalled', () => { installEvt = null; toast('Attendly is installed on this device.'); });
+function installCard(dismissable) {
+  if (standalone()) return '';
+  if (dismissable && store.get('attendly_install_hide')) return '';
+  const body = installEvt ? '<button class="btn small" id="inst">Install app</button>'
+    : isIos() ? '<span class="sub">On iPhone: tap the Share button in Safari, then choose <b>Add to Home Screen</b>.</span>'
+    : '<span class="sub">In Chrome, open the menu (⋮) and choose <b>Install app</b> or <b>Add to Home screen</b>.</span>';
+  return `<section class="glass panel install" style="margin-bottom:18px"><p><b>Use Attendly as an app</b><br><span class="sub">Opens full screen from your home screen and loads faster.</span></p>${body}${dismissable ? '<button class="btn small soft" id="instHide" aria-label="Hide">Not now</button>' : ''}</section>`;
+}
+function bindInstall() {
+  const b = $('#inst'); if (b && installEvt) b.onclick = async () => { installEvt.prompt(); try { await installEvt.userChoice; } catch { /* ignored */ } installEvt = null; route(); };
+  const h = $('#instHide'); if (h) h.onclick = () => { store.set('attendly_install_hide', '1'); h.closest('.install').remove(); };
+}
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
 // ---------- boot ----------
 (async function boot() {
