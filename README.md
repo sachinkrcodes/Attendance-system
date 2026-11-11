@@ -123,3 +123,12 @@ Tests: `node test/api.test.js`.
 - Sample students use `@demo.attendly` emails and cannot sign in.
 - Mobile numbers are stored and shown to the teacher of the class. Phone OTP by SMS is not included because SMS needs a paid provider.
 - Never put passwords, App Passwords or database URLs in GitHub.
+
+## v7
+- **HOD role**: admin opens People → "Make HOD". The HOD gets a Department page: all teachers and classes of the college, add/reassign classes, manage timetables, unlock attendance, announce to the college.
+- **Attendance lock**: each college has an editing window (Colleges → lock hours, 0 = never). After a first save the teacher can edit for that many hours; then it is locked until the HOD unlocks it (1–72 h). First entry allowed only for the last 7 days.
+- **Home**: 30-day ring, today's classes, announcements, then the tiles.
+- **Admin**: Overview (per-college attendance), Colleges, People (HOD, sign out, delete, CSV), Notices (announcements), Activity log, Remove practice data.
+- All demo/sample/practice features removed. Install prompt appears on first visit.
+- Set `ADMIN_EMAILS` in Vercel to your email; delete `SHOW_OTP`.
+- **Slow network**: top loading bar, 'Slow connection' message after 2.5 s, 25 s timeout, automatic retry for reads, offline banner, saved data shown when the network drops.

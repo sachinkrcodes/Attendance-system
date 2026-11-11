@@ -61,18 +61,59 @@ let user = null;
 let token = store.get('attendly_token');
 
 const cache = new Map();
+
+// ---------- slow / offline network ----------
+let pending = 0, slowTimer = null;
+function netUi() {
+  let bar = $('#netbar');
+  if (!bar) { document.body.insertAdjacentHTML('beforeend', '<div id="netbar" aria-hidden="true"></div><div id="netmsg" role="status" aria-live="polite"></div>'); bar = $('#netbar'); }
+  bar.classList.toggle('on', pending > 0);
+  const m = $('#netmsg');
+  if (!navigator.onLine) { m.textContent = 'You are offline. Showing saved data where possible.'; m.className = 'show off'; }
+  else if (pending > 0 && slowTimer === 'slow') { m.textContent = 'Slow connection. Still loading, please wait…'; m.className = 'show'; }
+  else m.className = '';
+}
+function netStart() {
+  pending++;
+  if (pending === 1) { clearTimeout(slowTimer); slowTimer = setTimeout(() => { slowTimer = 'slow'; netUi(); }, 2500); }
+  netUi();
+}
+function netEnd() {
+  pending = Math.max(0, pending - 1);
+  if (!pending) { clearTimeout(slowTimer); slowTimer = null; }
+  netUi();
+}
+window.addEventListener('online', () => { netUi(); toast('Back online.'); if (user) route(); });
+window.addEventListener('offline', netUi);
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function api(method, path, body) {
   const cacheable = method === 'GET' && !path.includes('/checkin') && !path.startsWith('/auth');
   if (cacheable) { const h = cache.get(path); if (h && Date.now() - h.t < 20000) return structuredClone(h.d); }
-  let res;
+  const tries = method === 'GET' ? 3 : 1;
+  let res, last;
+  netStart();
   try {
-    res = await fetch('/api' + path, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch {
-    throw new Error('Cannot reach the server. Check your internet connection.');
+    for (let i = 0; i < tries; i++) {
+      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 25000);
+      try {
+        res = await fetch('/api' + path, {
+          method, signal: ctl.signal,
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        clearTimeout(to);
+        if (res.status >= 502 && res.status <= 504 && i < tries - 1) { await wait(700 * (i + 1)); continue; }
+        break;
+      } catch (e) {
+        clearTimeout(to); last = e; res = null;
+        if (i < tries - 1) await wait(700 * (i + 1));
+      }
+    }
+  } finally { netEnd(); }
+  if (!res) {
+    if (cacheable) { const h = cache.get(path); if (h) { toast('Network is weak. Showing your last saved data.', true); return structuredClone(h.d); } }
+    throw new Error(last && last.name === 'AbortError' ? 'The network is too slow. Please try again.' : 'Cannot reach the server. Check your internet connection.');
   }
   let data = {};
   try { data = await res.json(); } catch { /* empty body */ }
@@ -422,9 +463,10 @@ function signOut(silent) {
 const NAV = {
   teacher: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['register', 'Register', 'register'], ['requests', 'Requests', 'requests'], ['reports', 'Reports', 'reports'], ['settings', 'Settings', 'settings']],
   student: [['home', 'Home', 'home'], ['classes', 'Classes', 'classes'], ['checkin', 'Check in', 'checkin'], ['history', 'History', 'history'], ['settings', 'Settings', 'settings']],
-  admin: [['home', 'Overview', 'home'], ['colleges', 'Colleges', 'classes'], ['people', 'People', 'user'], ['settings', 'Settings', 'settings']],
+  admin: [['home', 'Overview', 'home'], ['colleges', 'Colleges', 'classes'], ['people', 'People', 'user'], ['announce', 'Notices', 'chat'], ['activity', 'Activity', 'history'], ['settings', 'Settings', 'settings']],
 };
 const ROLE_NAME = { teacher: 'Teacher', student: 'Student', admin: 'Admin' };
+const roleName = (u) => (u.role === 'teacher' && u.hod ? 'HOD' : ROLE_NAME[u.role]);
 
 function startApp() {
   clearInterval(authTimer);
@@ -436,7 +478,7 @@ function startApp() {
       <div class="top-right">
         ${user.role === 'admin' ? '' : `<a class="icon-btn" href="#/notifications" aria-label="Notifications">${icon('requests')}</a>`}
         <button class="icon-btn" id="themeBtn" type="button"></button>
-        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${ROLE_NAME[user.role]}${user.college ? ' · ' + esc(user.college) : ''}</small></div></a>
+        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${roleName(user)}${user.college ? ' · ' + esc(user.college) : ''}</small></div></a>
         <button class="icon-btn" id="outBtn" type="button" aria-label="Sign out">${icon('out')}</button>
       </div>
     </header>
@@ -516,20 +558,19 @@ const T = {};
 T.home = async (view) => {
   if (!user.approved) { try { user = (await api('GET', '/me')).user; } catch { /* keep */ } }
   const wait = user.approved ? '' : '<section class="glass panel notice" style="margin-bottom:18px"><b>Waiting for approval</b><p class="sub">Your college admin must approve your teacher account before you can create classes. You will see the change here.</p></section>';
-  const d = await api('GET', '/dashboard');
+  const [d, tt, bc] = await Promise.all([api('GET', '/dashboard'), api('GET', '/timetable'), api('GET', '/broadcasts').catch(() => ({ items: [] }))]);
   const min = user.threshold;
   if (!d.classes.length) {
-    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>${wait}${installCard(true)}${hub()}
-    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class, or add a practice class to see how reports look.</p>
-    <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button><button class="btn soft" id="demo">Add practice class</button></div></section>`;
+    view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Start by creating a class. Students join with a code.</p></div>${wait}${broadcastsPanel(bc.items)}${hub()}
+    <section class="glass panel empty"><h3>No classes yet</h3><p>Create your first class. Your head of department can also assign classes to you.</p>
+    <div class="actions" style="justify-content:center"><button class="btn" id="mk">Create a class</button></div></section>`;
     $('#mk').onclick = () => newClassModal();
-    $('#demo').onclick = loadDemo;
     return;
   }
   const risk = d.atRisk.length;
   view.innerHTML = `
-  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>${wait}${installCard(true)}${hub()}
-  <div class="grid home-grid" style="margin-top:18px">
+  <div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>Last 30 days across all your classes.</p></div>${wait}${broadcastsPanel(bc.items)}
+  <div class="grid home-grid">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.totals.rate, 'last 30 days', min)}<p class="sub">Minimum you set: ${min}%</p></section>
     <div class="stack">
       <div class="grid cols-3">
@@ -541,6 +582,7 @@ T.home = async (view) => {
       <section class="glass panel"><h2>Trend</h2><p class="sub">Attendance rate on your last registers</p>${trendChart(d.trend)}</section>
     </div>
   </div>
+  ${todayCard(tt.items)}${spaced(hub())}
   <div class="grid cols-2" style="margin-top:18px">
     <section class="glass panel"><h2>Needs attention</h2><p class="sub">Students under ${min}% in any class</p>
       ${risk ? `<div class="list">${d.atRisk.map((s) => `<div class="row">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${esc(s.className)} · ${s.absent} absent</small></div>${chip(s.rate, min)}</div>`).join('')}</div>` : `<div class="empty"><p>${d.totals.recordedDays ? 'Everyone is above the minimum.' : 'Nothing to flag until you take attendance.'}</p></div>`}
@@ -572,9 +614,6 @@ function newClassModal() {
   });
 }
 
-async function loadDemo() {
-  try { await api('POST', '/demo'); toast('Practice class added.'); route(); } catch (e) { toast(e.message, true); }
-}
 
 function noticeModal(classes, selected) {
   openModal(`<h2>Post a notice</h2><p class="sub">Students in the class see it on their Home page.</p>
@@ -634,7 +673,7 @@ T.classes = async (view) => {
     <div class="actions"><button class="btn soft" id="pn" ${classes.length ? '' : 'disabled'}>Post notice</button><button class="btn" id="nc">New class</button></div></div>
     ${classes.length ? `<div class="grid cards">${classes.map((c) => `
       <article class="glass class-card">
-        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}${c.isDemo ? ' · practice' : ''}</p></div></div>
+        <div class="class-top"><div class="class-emoji">${esc(c.emoji || '📘')}</div><div><h3>${esc(c.name)}</h3><p class="sub">${esc(c.code || 'No course code')} · ${c.students} student${c.students === 1 ? '' : 's'}</p></div></div>
         <div class="code-box"><div><small>Join code</small><code>${esc(c.joinCode)}</code></div><button class="icon-btn" data-copy="${esc(c.joinCode)}" aria-label="Copy join code for ${esc(c.name)}">${icon('copy')}</button></div>
         <div><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="sub">Attendance</span>${chip(c.rate, min)}</div><div class="meter ${band(c.rate, min)}"><i style="width:${c.rate || 0}%"></i></div></div>
         <div class="actions"><a class="btn small" href="#/register/${c.id}">Take attendance</a><button class="btn small soft" data-ck="${c.id}">Check-in code</button><a class="btn small soft" href="#/reports/${c.id}">Report</a><button class="btn small soft" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>
@@ -660,7 +699,7 @@ T.register = async (view, arg) => {
   store.set('attendly_class', classId);
   let date = todayStr();
   let marks = {};
-  let students = [];
+  let students = [], lock = null, canUnlock = false;
   const cls = () => classes.find((c) => c.id === classId);
 
   const draw = () => {
@@ -670,18 +709,23 @@ T.register = async (view, arg) => {
     const unmarked = students.filter((s) => !marks[s.id]).length;
     const rows = students.filter((s) => s.name.toLowerCase().includes(q) || (s.rollNo || '').toLowerCase().includes(q)).map((s) => `
       <div class="reg-row"><div class="row" style="padding:0;background:none">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${s.rollNo ? esc(s.rollNo) + ' · ' : ''}Overall ${s.rate === null ? 'no data' : s.rate + '%'}</small></div></div>
-      <div class="seg" role="radiogroup" aria-label="Attendance for ${esc(s.name)}">${STATUS.map(([k, n]) => `<label><input type="radio" name="st-${s.id}" value="${k}" data-sid="${s.id}" ${marks[s.id] === k ? 'checked' : ''}><span>${sym(k)}${n}</span></label>`).join('')}</div></div>`).join('');
+      <div class="seg" role="radiogroup" aria-label="Attendance for ${esc(s.name)}">${STATUS.map(([k, n]) => `<label><input type="radio" name="st-${s.id}" value="${k}" data-sid="${s.id}" ${marks[s.id] === k ? 'checked' : ''} ${lock && lock.locked ? 'disabled' : ''}><span>${sym(k)}${n}</span></label>`).join('')}</div></div>`).join('');
     $('#roster').innerHTML = students.length
       ? `<div class="list" style="margin-top:0">${rows || '<div class="empty"><p>No student matches that search.</p></div>'}</div>`
       : `<div class="glass panel empty"><h3>No students in this class yet</h3><p>Ask students to sign up and enter the join code <b>${esc(cls().joinCode)}</b>.</p></div>`;
     $('#tally').innerHTML = STATUS.map(([k, n]) => `<span><span class="dot ${k}"></span>${n} ${counts[k]}</span>`).join('') + (unmarked ? `<span class="sub">${unmarked} not marked</span>` : '');
-    $('#save').disabled = !students.length;
-    $('#allP').disabled = !students.length;
+    const locked = !!(lock && lock.locked);
+    $('#save').disabled = !students.length || locked;
+    $('#allP').disabled = !students.length || locked;
+    $('#lockBar').innerHTML = !lock || !lock.hours ? '' : locked
+      ? `<section class="glass panel notice"><b>This register is locked</b><p class="sub">The ${lock.hours}-hour editing window of your college has ended. ${canUnlock ? '' : 'Ask your head of department to unlock it.'}</p>${canUnlock ? '<button class="btn small" id="ul">Unlock</button>' : ''}</section>`
+      : `<p class="sub" style="margin:0 4px 12px">${lock.started ? 'You can change this register until ' + fmtWhen(lock.deadline) + '.' : 'Your first save starts a ' + lock.hours + '-hour editing window. After that the register locks.'}</p>`;
+    const ul = $('#ul'); if (ul) ul.onclick = () => unlockModal(classId, date, () => load().catch((x) => toast(x.message, true)));
   };
   const load = async () => {
     $('#roster').innerHTML = '<div class="loading">Loading…</div>';
     const r = await api('GET', `/classes/${classId}/roster?date=${date}`);
-    students = r.students; marks = {};
+    students = r.students; marks = {}; lock = r.lock; canUnlock = r.canUnlock;
     students.forEach((s) => { if (s.status) marks[s.id] = s.status; });
     draw();
   };
@@ -694,6 +738,7 @@ T.register = async (view, arg) => {
     <button class="btn soft" id="allP" type="button">Mark all present</button>
     <button class="btn soft" id="ck" type="button">Check-in code</button>
   </section>
+  <div id="lockBar"></div>
   <div id="roster"></div>
   <div class="glass savebar no-print"><div class="tally" id="tally"></div><button class="btn" id="save" type="button">Save register</button></div>`;
 
@@ -749,7 +794,7 @@ T.reports = async (view, arg) => {
     <section class="glass toolbar no-print"><div class="field"><label for="rc">Class</label><select id="rc">${classOptions(classes, classId)}</select></div></section>
     <section class="glass panel"><h2>${esc(r.class.name)}</h2><p class="sub">Dashed marks are below ${r.threshold}%</p>
     ${r.rows.length ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Student</th><th>Mobile</th><th class="n">Present</th><th class="n">Late</th><th class="n">Absent</th><th class="n">Leave</th><th class="n">Rate</th></tr></thead><tbody>
-      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${s.rollNo ? esc(s.rollNo) + ' · ' : ''}${esc(s.email.endsWith('@demo.attendly') ? 'placeholder student' : s.email)}</span></td><td>${esc(s.phone || '-')}</td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
+      ${r.rows.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="sub">${s.rollNo ? esc(s.rollNo) + ' · ' : ''}${esc(s.email)}</span></td><td>${esc(s.phone || '-')}</td><td class="n">${s.present}</td><td class="n">${s.late}</td><td class="n">${s.absent}</td><td class="n">${s.leave}</td><td class="n">${chip(s.rate, r.threshold)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><p>No students have joined this class yet.</p></div>`}</section>`;
   $('#rc').onchange = (e) => { store.set('attendly_class', e.target.value); location.hash = '#/reports/' + e.target.value; };
   $('#prt').onclick = () => window.print();
   $('#csv').onclick = () => {
@@ -769,8 +814,8 @@ async function settingsPage(view) {
   const student = user.role === 'student';
   const act = await api('GET', '/me/activity').catch(() => ({ items: [] }));
   view.innerHTML = `<div class="page-head"><h1>Profile and settings</h1></div>
-  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${ROLE_NAME[user.role]} account</p></div></div>
-    <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${!student ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${ROLE_NAME[user.role]}</b></div>${user.role === 'admin' ? '' : `<div><small>College</small><b>${esc(user.college || 'Not set. Ask your admin.')}</b></div>`}</div></section>
+  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${user.hod ? 'Head of department' : ROLE_NAME[user.role]} account</p></div></div>
+    <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${!student ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${user.hod ? 'Head of department' : ROLE_NAME[user.role]}</b></div>${user.role === 'admin' ? '' : `<div><small>College</small><b>${esc(user.college || 'Not set. Ask your admin.')}</b></div>`}</div></section>
   ${installCard(false)}
   <div class="grid cols-2">
     <div class="stack">
@@ -791,7 +836,6 @@ async function settingsPage(view) {
         <div class="list">${act.items.length ? act.items.map((i) => `<div class="row"><div class="grow"><b>${esc(i.action)}</b><small>${fmtWhen(i.at)}${i.ip ? ' · ' + esc(i.ip) : ''}</small></div></div>`).join('') : '<div class="empty"><p>Nothing yet.</p></div>'}</div>
         <div class="actions" style="margin-top:14px"><button class="btn soft" id="all">Sign out of all devices</button></div></section>
       <section class="glass panel"><h2>Appearance</h2><p class="sub">Two colours, light or inverted.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="th">Switch theme</button></div></section>
-      ${teacher ? `<section class="glass panel"><h2>Test data</h2><p class="sub">Adds a practice class with 12 placeholder students and five weeks of attendance. Delete it from Classes when you are done.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="dm">Add practice class</button></div></section>` : ''}
       <section class="glass panel"><h2>Session</h2><div class="actions" style="margin-top:12px"><button class="btn soft" id="so">Sign out</button></div></section>
     </div>
   </div>`;
@@ -817,7 +861,6 @@ async function settingsPage(view) {
   });
   $('#th').onclick = () => $('#themeBtn').click();
   $('#so').onclick = () => signOut();
-  const dm = $('#dm'); if (dm) dm.onclick = loadDemo;
 }
 T.settings = settingsPage;
 
@@ -840,11 +883,11 @@ function leaveModal(c) {
 }
 
 S.home = async (view) => {
-  const d = await api('GET', '/student/summary');
+  const [d, tt, bc] = await Promise.all([api('GET', '/student/summary'), api('GET', '/timetable'), api('GET', '/broadcasts').catch(() => ({ items: [] }))]);
   const mins = d.classes.map((c) => c.threshold);
   const low = d.classes.filter((c) => c.stats.rate !== null && c.stats.rate < c.threshold);
-  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>${installCard(true)}${hub()}
-  <div class="grid home-grid" style="margin-top:18px">
+  view.innerHTML = `<div class="page-head"><h1>${greet()}, ${esc(first(user.name))}</h1><p>${d.classes.length ? 'Your attendance across every class.' : 'Join your first class with the code your teacher gave you.'}</p></div>${broadcastsPanel(bc.items)}
+  <div class="grid home-grid">
     <section class="glass panel orb-wrap"><h2>Overall attendance</h2>${orb(d.overall.rate, 'all classes', mins.length ? Math.min(...mins) : 75)}
       <p class="sub">${d.overall.present + d.overall.late} attended · ${d.overall.absent} missed · ${d.overall.leave} on leave</p></section>
     <div class="stack">
@@ -855,7 +898,8 @@ S.home = async (view) => {
         <p class="error" id="jErr" style="margin:10px 0 0" role="alert"></p></section>
       ${d.classes.length ? `<section class="glass panel"><h2>Your classes</h2><div class="list">${d.classes.map((c) => `<div class="row wrap"><div class="mini">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.teacher)}</small><div class="meter ${band(c.stats.rate, c.threshold)}" style="margin-top:6px"><i style="width:${c.stats.rate || 0}%"></i></div></div>${chip(c.stats.rate, c.threshold)}</div>`).join('')}</div></section>` : ''}
     </div>
-  </div>`;
+  </div>
+  ${todayCard(tt.items)}${spaced(hub())}`;
   $('#jf').onsubmit = async (e) => {
     e.preventDefault();
     try { const o = await api('POST', '/classes/join', { code: $('#jc').value }); toast('Joined ' + o.joined + '.'); route(); }
@@ -927,13 +971,13 @@ const dateBox = (d) => { const x = new Date(d + 'T00:00:00'); return `<div class
 const statusPill = (s) => `<span class="chip ${s === 'approved' || s === 'resolved' ? 'good' : s === 'rejected' ? 'bad' : 'warn'}">${s === 'rejected' ? '<span>Rejected</span>' : s[0].toUpperCase() + s.slice(1)}</span>`;
 const myClassList = async () => (await api('GET', '/classes')).classes;
 
-function formModal(title, sub, fields, submit, onSubmit) {
+function formModal(title, sub, fields, submit, onSubmit, after) {
   openModal(`<h2>${esc(title)}</h2>${sub ? `<p class="sub">${esc(sub)}</p>` : ''}<form id="fm" style="margin-top:16px">${fields}<p class="error" id="fmErr" role="alert"></p>
     <div class="actions"><button type="button" class="btn soft" data-cancel>Cancel</button><button class="btn" type="submit">${esc(submit)}</button></div></form>`, (root, close) => {
     $('#fm', root).onsubmit = async (e) => {
       e.preventDefault();
       const btn = $('button[type=submit]', root); btn.disabled = true;
-      try { await onSubmit(root); close(); route(); } catch (ex) { $('#fmErr', root).textContent = ex.message; btn.disabled = false; }
+      try { await onSubmit(root); close(); if (after) after(); else route(); } catch (ex) { $('#fmErr', root).textContent = ex.message; btn.disabled = false; }
     };
   });
 }
@@ -1058,7 +1102,7 @@ P.notifications = async (view) => {
 function hub() {
   const t = isTeacher();
   const tiles = t
-    ? [['register', 'Register', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['requests', 'Leave', 'classes'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['reports', 'Reports', 'reports'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']]
+    ? [...(user.hod ? [['department', 'Department', 'classes']] : []), ['register', 'Register', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['requests', 'Leave', 'classes'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['reports', 'Reports', 'reports'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']]
     : [['history', 'Attendance', 'register'], ['timetable', 'Timetable', 'history'], ['calendar', 'Calendar', 'cal'], ['exams', 'Exams', 'exam'], ['results', 'Results', 'award'], ['checkin', 'Check in', 'checkin'], ['passes', 'Gate pass', 'door'], ['help', 'Help desk', 'chat'], ['notifications', 'Updates', 'requests'], ['settings', 'Profile', 'user']];
   return `<section class="tiles" aria-label="Everything in one place">${tiles.map(([h, n, i]) => `<a class="glass tile" href="#/${h}">${icon(i)}<span>${n}</span></a>`).join('')}</section>`;
 }
@@ -1077,21 +1121,24 @@ A.home = async (view) => {
   ${t.pending ? `<button class="glass stat alert" id="pend" style="margin-top:18px;width:100%;text-align:left;cursor:pointer"><b>${t.pending}</b><span>Teacher${t.pending === 1 ? '' : 's'} waiting for approval. Open People.</span></button>` : ''}
   ${t.unassigned ? `<p class="sub" style="margin-top:14px">${t.unassigned} older account${t.unassigned === 1 ? ' has' : 's have'} no college yet. Open People and assign one.</p>` : ''}
   <h2 class="section-title">Colleges</h2>
-  <section class="glass panel">${d.colleges.length ? `<div class="table-wrap"><table><thead><tr><th>College</th><th class="n">Teachers</th><th class="n">Students</th><th class="n">Classes</th></tr></thead><tbody>${d.colleges.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="sub">${esc([c.code, c.city].filter(Boolean).join(' · ') || '')}${c.active ? '' : ' · disabled'}</span></td><td class="n">${c.teachers}</td><td class="n">${c.students}</td><td class="n">${c.classes}</td></tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty"><h3>Add your first college</h3><p>People choose their college when they sign up, so add it before anyone registers.</p><a class="btn" href="#/colleges">Add a college</a></div>'}</section>`;
+  <section class="glass panel">${d.colleges.length ? `<div class="table-wrap"><table><thead><tr><th>College</th><th class="n">Teachers</th><th class="n">Students</th><th class="n">Classes</th><th class="n">Attendance</th></tr></thead><tbody>${d.colleges.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="sub">${esc([c.code, c.city].filter(Boolean).join(' · ') || '')}${c.active ? '' : ' · disabled'}</span></td><td class="n">${c.teachers}</td><td class="n">${c.students}</td><td class="n">${c.classes}</td><td class="n">${c.rate === null ? '-' : c.rate + '%'}</td></tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty"><h3>Add your first college</h3><p>People choose their college when they sign up, so add it before anyone registers.</p><a class="btn" href="#/colleges">Add a college</a></div>'}</section>
+  <section class="glass panel" style="margin-top:18px"><h2>Clean-up</h2><p class="sub">Removes old practice classes and placeholder students left from earlier versions.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="purge">Remove practice data</button></div></section>`;
+  const pg = $('#purge'); if (pg) pg.onclick = () => confirmBox('Remove all practice data?', 'This deletes old practice classes and their placeholder students. Real accounts are not touched.', 'Remove', async () => { try { const o = await api('POST', '/admin/purge-practice'); toast(o.classes + ' practice class(es) removed.'); route(); } catch (e) { toast(e.message, true); } });
   const pend = $('#pend'); if (pend) pend.onclick = () => { Object.assign(adminFilter, { role: '', collegeId: '', status: 'pending', q: '' }); location.hash = '#/people'; };
 };
 
 function collegeModal(c) {
   formModal(c ? 'Edit college' : 'Add a college', 'People pick it from a list when they sign up.', `<div class="field"><label for="cn">Full name</label><input id="cn" type="text" maxlength="100" value="${esc(c ? c.name : '')}" placeholder="Parul University"></div>
-    <div class="row2"><div class="field"><label for="cc">City</label><input id="cc" type="text" maxlength="60" value="${esc(c ? c.city : '')}" placeholder="Vadodara"></div><div class="field"><label for="ck">Short code</label><input id="ck" type="text" maxlength="20" value="${esc(c ? c.code : '')}" placeholder="PU"></div></div>`, c ? 'Save' : 'Add college',
-  (r) => (c ? api('PATCH', '/admin/colleges/' + c.id, { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value }) : api('POST', '/admin/colleges', { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value })).then(() => toast(c ? 'College saved.' : 'College added.')));
+    <div class="row2"><div class="field"><label for="cc">City</label><input id="cc" type="text" maxlength="60" value="${esc(c ? c.city : '')}" placeholder="Vadodara"></div><div class="field"><label for="ck">Short code</label><input id="ck" type="text" maxlength="20" value="${esc(c ? c.code : '')}" placeholder="PU"></div></div>
+    <div class="field"><label for="cl">Attendance editing window (hours)</label><input id="cl" type="number" min="0" max="720" value="${c ? c.lockHours : 24}"><p class="hint">After a teacher first saves a register, they can change it for this many hours. Then it locks and only the head of department can unlock it. Use 0 for no lock.</p></div>`, c ? 'Save' : 'Add college',
+  (r) => (c ? api('PATCH', '/admin/colleges/' + c.id, { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value, lockHours: +$('#cl', r).value }) : api('POST', '/admin/colleges', { name: $('#cn', r).value, city: $('#cc', r).value, code: $('#ck', r).value, lockHours: +$('#cl', r).value })).then(() => toast(c ? 'College saved.' : 'College added.')));
 }
 
 A.colleges = async (view) => {
   const d = await api('GET', '/admin/overview');
   view.innerHTML = `<div class="page-head row"><div><h1>Colleges</h1><p>Every teacher and student belongs to one college.</p></div><button class="btn" id="add">Add a college</button></div>
-  <section class="glass panel">${d.colleges.length ? `<div class="list" style="margin-top:0">${d.colleges.map((c) => `<div class="row wrap"><div class="grow"><b>${esc(c.name)}</b><small>${esc([c.code, c.city].filter(Boolean).join(' · '))}${[c.code, c.city].some(Boolean) ? ' · ' : ''}${c.teachers} teachers · ${c.students} students · ${c.classes} classes</small></div>
+  <section class="glass panel">${d.colleges.length ? `<div class="list" style="margin-top:0">${d.colleges.map((c) => `<div class="row wrap"><div class="grow"><b>${esc(c.name)}</b><small>${esc([c.code, c.city].filter(Boolean).join(' · '))}${[c.code, c.city].some(Boolean) ? ' · ' : ''}${c.teachers} teachers · ${c.students} students · ${c.classes} classes · ${c.rate === null ? 'no attendance yet' : c.rate + '% attendance'} · ${c.lockHours ? 'locks after ' + c.lockHours + 'h' : 'no lock'}</small></div>
     <span class="chip ${c.active ? 'good' : 'none'}">${c.active ? 'Active' : 'Disabled'}</span><button class="btn small soft" data-edit="${c.id}">Edit</button><button class="btn small soft" data-tog="${c.id}">${c.active ? 'Disable' : 'Enable'}</button><button class="btn small danger" data-del="${c.id}" data-name="${esc(c.name)}">Delete</button></div>`).join('')}</div>` : '<div class="empty"><h3>No colleges yet</h3><p>Add the first one.</p></div>'}</section>`;
   $('#add').onclick = () => collegeModal(null);
   $$('[data-edit]', view).forEach((b) => (b.onclick = () => collegeModal(d.colleges.find((c) => c.id === b.dataset.edit))));
@@ -1102,32 +1149,127 @@ A.colleges = async (view) => {
 A.people = async (view) => {
   const [cols, list] = await Promise.all([api('GET', '/admin/overview'), api('GET', '/admin/users?' + new URLSearchParams(Object.entries(adminFilter).filter(([, v]) => v)))]);
   const opt = (v, n, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${esc(n)}</option>`;
-  view.innerHTML = `<div class="page-head"><h1>People</h1><p>Approve teachers, assign colleges, and disable accounts.</p></div>
+  view.innerHTML = `<div class="page-head row"><div><h1>People</h1><p>Approve teachers, make a head of department, assign colleges, and disable accounts.</p></div><button class="btn soft" id="csv">Download list</button></div>
   <section class="glass panel"><div class="row2" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
     <div class="field"><label for="fs">Search</label><input id="fs" type="search" placeholder="Name or email" value="${esc(adminFilter.q)}"></div>
     <div class="field"><label for="fr">Role</label><select id="fr">${opt('', 'Everyone', adminFilter.role)}${opt('teacher', 'Teachers', adminFilter.role)}${opt('student', 'Students', adminFilter.role)}</select></div>
     <div class="field"><label for="fc">College</label><select id="fc">${opt('', 'All colleges', adminFilter.collegeId)}${opt('none', 'No college', adminFilter.collegeId)}${cols.colleges.map((c) => opt(c.id, c.name, adminFilter.collegeId)).join('')}</select></div>
     <div class="field"><label for="fst">Status</label><select id="fst">${opt('', 'Any', adminFilter.status)}${opt('pending', 'Waiting for approval', adminFilter.status)}${opt('disabled', 'Disabled', adminFilter.status)}</select></div></div>
-    ${list.items.length ? `<div class="list">${list.items.map((u) => `<div class="row wrap"><div class="avatar" aria-hidden="true">${esc(initials(u.name))}</div><div class="grow"><b>${esc(u.name)} <span class="kind">${u.role}</span></b><small>${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.rollNo ? ' · ' + esc(u.rollNo) : ''}</small><small>${esc(u.college || 'No college')}</small></div>
+    ${list.items.length ? `<div class="list">${list.items.map((u) => `<div class="row wrap"><div class="avatar" aria-hidden="true">${esc(initials(u.name))}</div><div class="grow"><b>${esc(u.name)} <span class="kind">${u.hod ? 'HOD' : u.role}</span></b><small>${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.rollNo ? ' · ' + esc(u.rollNo) : ''}</small><small>${esc(u.college || 'No college')}</small></div>
       ${u.disabled ? '<span class="chip none">Disabled</span>' : u.role === 'teacher' && !u.approved ? '<span class="chip warn">Waiting</span>' : '<span class="chip good">Active</span>'}
       ${u.role === 'teacher' && !u.approved && !u.disabled ? `<button class="btn small" data-act="approve" data-id="${u.id}">Approve</button>` : ''}
+      ${u.role === 'teacher' && u.approved && !u.disabled && u.collegeId ? `<button class="btn small soft" data-act="${u.hod ? 'unhod' : 'hod'}" data-id="${u.id}">${u.hod ? 'Remove HOD' : 'Make HOD'}</button>` : ''}
       <button class="btn small soft" data-assign="${u.id}">College</button>
-      <button class="btn small soft" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Enable' : 'Disable'}</button></div>`).join('')}</div>` : '<div class="empty"><h3>No one matches</h3><p>Try other filters.</p></div>'}</section>`;
+      <button class="btn small soft" data-act="signout" data-id="${u.id}">Sign out</button>
+      <button class="btn small soft" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Enable' : 'Disable'}</button>
+      ${u.disabled ? `<button class="btn small danger" data-rm="${u.id}" data-nm="${esc(u.name)}">Delete</button>` : ''}</div>`).join('')}</div>` : '<div class="empty"><h3>No one matches</h3><p>Try other filters.</p></div>'}</section>`;
   const set = (k) => (e) => { adminFilter[k] = e.target.value; route(); };
   $('#fr').onchange = set('role'); $('#fc').onchange = set('collegeId'); $('#fst').onchange = set('status');
   let t; $('#fs').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { adminFilter.q = e.target.value; route(); }, 400); };
   $$('[data-act]', view).forEach((b) => (b.onclick = async () => { try { await api('POST', '/admin/users/' + b.dataset.id, { action: b.dataset.act }); toast('Done.'); route(); } catch (e) { toast(e.message, true); } }));
+  $$('[data-rm]', view).forEach((b) => (b.onclick = () => confirmBox('Delete ' + b.dataset.nm + '?', 'Their account and all their records are removed for good.', 'Delete account', async () => { try { await api('DELETE', '/admin/users/' + b.dataset.rm); toast('Account deleted.'); route(); } catch (e) { toast(e.message, true); } })));
+  const csv = $('#csv'); if (csv) csv.onclick = () => {
+    const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const rows = [['Name', 'Email', 'Role', 'College', 'Mobile', 'Roll no', 'Status'], ...list.items.map((u) => [u.name, u.email, u.hod ? 'HOD' : u.role, u.college, u.phone, u.rollNo, u.disabled ? 'Disabled' : u.role === 'teacher' && !u.approved ? 'Waiting' : 'Active'])];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([rows.map((r) => r.map(q).join(',')).join('\n')], { type: 'text/csv' })); a.download = 'attendly-people.csv'; a.click(); URL.revokeObjectURL(a.href);
+  };
   $$('[data-assign]', view).forEach((b) => (b.onclick = () => formModal('Set college', 'Moves this person to the college you pick.', `<div class="field"><label for="ac">College</label><select id="ac">${cols.colleges.filter((c) => c.active).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>`, 'Save',
     (r) => api('POST', '/admin/users/' + b.dataset.assign, { action: 'assign', collegeId: $('#ac', r).value }).then(() => toast('College updated.')))));
   if (adminFilter.q) { const f = $('#fs'); f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
 };
 A.settings = settingsPage;
 
+// ---------- home helpers ----------
+function todayCard(items) {
+  const dow = ((new Date().getDay() + 6) % 7) + 1, nowT = new Date().toTimeString().slice(0, 5);
+  const list = items.filter((i) => i.day === dow);
+  return `<section class="glass panel" style="margin-top:18px"><div class="between"><h2>Today's classes</h2><a class="btn small soft" href="#/timetable">Full timetable</a></div>
+    ${list.length ? `<div style="margin-top:12px">${list.map((i) => `<div class="slot ${nowT >= i.start && nowT < i.end ? 'now' : ''}"><time>${t12(i.start)} – ${t12(i.end)}</time><div style="flex:1;min-width:0"><b>${esc(i.emoji || '')} ${esc(i.className)}</b>${i.room ? `<small class="sub" style="display:block">Room ${esc(i.room)}</small>` : ''}</div></div>`).join('')}</div>` : '<div class="empty"><p>No classes scheduled for today.</p></div>'}</section>`;
+}
+function broadcastsPanel(items) {
+  if (!items || !items.length) return '';
+  return `<section class="glass panel" style="margin-bottom:18px"><h2>Announcements</h2><div class="list">${items.slice(0, 3).map((n) => `<div class="notice"><small>${esc(n.college)} · ${fmtWhen(n.at)}</small><b>${esc(n.title)}</b><br>${esc(n.body)}</div>`).join('')}</div></section>`;
+}
+const spaced = (html) => `<div style="margin-top:18px">${html}</div>`;
+
+// ---------- head of department ----------
+function ttModal(c) {
+  api('GET', '/timetable?classId=' + c.id).then(({ items }) => {
+    openModal(`<h2>Timetable: ${esc(c.name)}</h2><p class="sub">${esc(c.teacher)}</p>
+      <div class="list" style="margin-top:12px;max-height:30vh;overflow:auto">${items.length ? items.map((i) => `<div class="row"><div class="grow"><b>${DAYS[i.day]}</b><small>${t12(i.start)} – ${t12(i.end)}${i.room ? ' · Room ' + esc(i.room) : ''}</small></div><button class="btn small soft" data-rm="${i.id}">Remove</button></div>`).join('') : '<div class="empty"><p>No slots yet.</p></div>'}</div>
+      <form id="tf" style="margin-top:14px"><div class="row2"><div class="field"><label for="td">Day</label><select id="td">${DAYS.slice(1, 7).map((n, i) => `<option value="${i + 1}">${n}</option>`).join('')}</select></div><div class="field"><label for="tr">Room</label><input id="tr" type="text" maxlength="30"></div></div>
+      <div class="row2"><div class="field"><label for="ts">Starts</label><input id="ts" type="time" value="09:00"></div><div class="field"><label for="te">Ends</label><input id="te" type="time" value="10:00"></div></div>
+      <p class="error" id="tErr" role="alert"></p><div class="actions"><button type="button" class="btn soft" data-cancel>Close</button><button class="btn" type="submit">Add slot</button></div></form>`, (root, close) => {
+      $$('[data-rm]', root).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/timetable/' + b.dataset.rm); close(); ttModal(c); } catch (e) { toast(e.message, true); } }));
+      $('#tf', root).onsubmit = async (e) => {
+        e.preventDefault();
+        try { await api('POST', `/classes/${c.id}/timetable`, { day: +$('#td', root).value, start: $('#ts', root).value, end: $('#te', root).value, room: $('#tr', root).value }); close(); ttModal(c); }
+        catch (ex) { $('#tErr', root).textContent = ex.message; }
+      };
+    });
+  }).catch((e) => toast(e.message, true));
+}
+
+T.department = async (view) => {
+  if (!user.hod) { location.hash = '#/home'; return; }
+  const d = await api('GET', '/hod/overview');
+  const teacherOpts = (sel) => d.teachers.map((t) => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+  view.innerHTML = `<div class="page-head row"><div><h1>Department</h1><p>${esc(d.college)} · attendance can be edited for ${d.lockHours ? d.lockHours + ' hours' : 'any time'} after the first save.</p></div>
+    <div class="actions"><button class="btn soft" id="ann">Announce</button><button class="btn" id="add">Add a class</button></div></div>
+  <section class="glass panel"><h2>Teachers</h2><div class="list">${d.teachers.map((t) => `<div class="row wrap">${avatar(t.name)}<div class="grow"><b>${esc(t.name)}${t.hod ? ' <span class="kind">HOD</span>' : ''}</b><small>${esc(t.email)}${t.phone ? ' · ' + esc(t.phone) : ''}</small></div><span class="sub">${t.classes} class${t.classes === 1 ? '' : 'es'}</span></div>`).join('') || '<div class="empty"><p>No approved teachers yet.</p></div>'}</div></section>
+  <h2 class="section-title">All classes</h2>
+  <section class="glass panel">${d.classes.length ? `<div class="list" style="margin-top:0">${d.classes.map((c) => `<div class="row wrap"><div class="mini">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.teacher)} · ${c.students} student${c.students === 1 ? '' : 's'}</small></div>${chip(c.rate, 75)}
+    <button class="btn small soft" data-tt="${c.id}">Timetable</button><button class="btn small soft" data-as="${c.id}">Reassign</button><button class="btn small soft" data-ul="${c.id}">Unlock</button></div>`).join('')}</div>` : '<div class="empty"><h3>No classes yet</h3><p>Add a class and choose its teacher.</p></div>'}</section>`;
+  const cl = (id) => d.classes.find((c) => c.id === id);
+  $('#add').onclick = () => formModal('Add a class', 'It is created for the teacher you choose.', `<div class="field"><label for="ft">Teacher</label><select id="ft">${teacherOpts()}</select></div><div class="field"><label for="fn">Class name</label><input id="fn" type="text" maxlength="60"></div><div class="field"><label for="fk">Course code</label><input id="fk" type="text" maxlength="20"></div>`, 'Create class',
+    (r) => api('POST', '/hod/classes', { teacherId: $('#ft', r).value, name: $('#fn', r).value, code: $('#fk', r).value }).then(() => toast('Class created.')));
+  $('#ann').onclick = () => formModal('Announce to your college', 'Every teacher and student of your college sees it.', '<div class="field"><label for="at">Title</label><input id="at" type="text" maxlength="80"></div><div class="field"><label for="ab">Message</label><textarea id="ab" maxlength="600"></textarea></div>', 'Post',
+    (r) => api('POST', '/hod/broadcasts', { title: $('#at', r).value, body: $('#ab', r).value }).then(() => toast('Announcement posted.')));
+  $$('[data-tt]', view).forEach((b) => (b.onclick = () => ttModal(cl(b.dataset.tt))));
+  $$('[data-as]', view).forEach((b) => (b.onclick = () => formModal('Reassign class', cl(b.dataset.as).name, `<div class="field"><label for="ft">New teacher</label><select id="ft">${teacherOpts(cl(b.dataset.as).teacherId)}</select></div>`, 'Reassign',
+    (r) => api('POST', `/hod/classes/${b.dataset.as}/assign`, { teacherId: $('#ft', r).value }).then(() => toast('Class reassigned.')))));
+  $$('[data-ul]', view).forEach((b) => (b.onclick = () => unlockModal(b.dataset.ul, todayStr(), () => route())));
+};
+
+function unlockModal(classId, date, done) {
+  formModal('Unlock attendance', 'The teacher can change the register again for the time you choose.', `<div class="field"><label for="ud">Date</label><input id="ud" type="date" value="${date}" max="${todayStr()}"></div>
+    <div class="field"><label for="uh">Unlocked for</label><select id="uh"><option value="6">6 hours</option><option value="24" selected>24 hours</option><option value="48">48 hours</option><option value="72">72 hours</option></select></div>`, 'Unlock',
+  (r) => api('POST', `/classes/${classId}/attendance/unlock`, { date: $('#ud', r).value, hours: +$('#uh', r).value }).then(() => toast('Attendance unlocked.')), done);
+}
+
+// ---------- more admin pages ----------
+A.announce = async (view) => {
+  const [{ items }, ov] = await Promise.all([api('GET', '/admin/broadcasts'), api('GET', '/admin/overview')]);
+  view.innerHTML = `<div class="page-head row"><div><h1>Announcements</h1><p>Send a message to everyone, or to one college.</p></div><button class="btn" id="add">New announcement</button></div>
+  <section class="glass panel">${items.length ? `<div class="list" style="margin-top:0">${items.map((n) => `<div class="row wrap" style="align-items:flex-start"><div class="grow" style="white-space:normal"><b style="white-space:normal">${esc(n.title)}</b><small>${esc(n.college)} · ${fmtWhen(n.at)}</small><small style="color:var(--ink);margin-top:4px">${esc(n.body)}</small></div><button class="btn small soft" data-del="${n.id}">Delete</button></div>`).join('')}</div>` : '<div class="empty"><h3>Nothing posted</h3><p>Announcements appear on every Home screen and in Updates.</p></div>'}</section>`;
+  $$('[data-del]', view).forEach((b) => (b.onclick = async () => { try { await api('DELETE', '/admin/broadcasts/' + b.dataset.del); toast('Deleted.'); route(); } catch (e) { toast(e.message, true); } }));
+  $('#add').onclick = () => formModal('New announcement', '', `<div class="field"><label for="ac">Send to</label><select id="ac"><option value="">Everyone</option>${ov.colleges.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div><div class="field"><label for="at">Title</label><input id="at" type="text" maxlength="80"></div><div class="field"><label for="ab">Message</label><textarea id="ab" maxlength="600"></textarea></div>`, 'Post',
+    (r) => api('POST', '/admin/broadcasts', { collegeId: $('#ac', r).value, title: $('#at', r).value, body: $('#ab', r).value }).then(() => toast('Announcement posted.')));
+};
+
+A.activity = async (view) => {
+  const { items } = await api('GET', '/admin/activity');
+  view.innerHTML = `<div class="page-head"><h1>Activity</h1><p>The latest sign-ins, approvals and admin actions across the platform.</p></div>
+  <section class="glass panel">${items.length ? `<div class="list" style="margin-top:0">${items.map((i) => `<div class="row wrap"><div class="grow"><b>${esc(i.action)}</b><small>${esc(i.name)} (${esc(i.role)}) · ${esc(i.email)}${i.detail ? ' · ' + esc(i.detail) : ''}</small></div><small class="sub">${fmtWhen(i.at)}${i.ip ? '<br>' + esc(i.ip) : ''}</small></div>`).join('')}</div>` : '<div class="empty"><p>Nothing yet.</p></div>'}</section>`;
+};
+
+function sheetInstall() {
+  const old = $('#instSheet'); if (old) old.remove();
+  if (standalone()) return;
+  if (Number(store.get('attendly_sheet_hide') || 0) > Date.now()) return;
+  const body = installEvt ? '<button class="btn small" id="sheetGo">Install</button>'
+    : isIos() ? '<span class="sub">Tap <b>Share</b> in Safari, then <b>Add to Home Screen</b>.</span>'
+    : '<span class="sub">Open the Chrome menu (⋮), then tap <b>Install app</b>.</span>';
+  document.body.insertAdjacentHTML('beforeend', `<aside class="sheet glass" id="instSheet" role="dialog" aria-label="Install Attendly"><div class="sheet-text"><b>Install Attendly</b><span class="sub">Get it on your home screen. Opens full screen and loads faster.</span>${installEvt ? '' : body}</div><div class="sheet-actions">${installEvt ? body : ''}<button class="btn small soft" id="sheetNo">Not now</button></div></aside>`);
+  const go = $('#sheetGo'); if (go) go.onclick = async () => { installEvt.prompt(); try { await installEvt.userChoice; } catch { /* ignored */ } installEvt = null; $('#instSheet') && $('#instSheet').remove(); };
+  $('#sheetNo').onclick = () => { store.set('attendly_sheet_hide', String(Date.now() + 3 * 86400000)); $('#instSheet').remove(); };
+}
+
 // ---------- install as an app ----------
 let installEvt = null;
 const standalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (user && /^#\/(home|settings)?$/.test(location.hash)) route(); });
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if ($('#instSheet')) sheetInstall(); if (user && /^#\/(home|settings)?$/.test(location.hash)) route(); });
 window.addEventListener('appinstalled', () => { installEvt = null; toast('Attendly is installed on this device.'); });
 function installCard(dismissable) {
   if (standalone()) return '';
@@ -1144,6 +1286,7 @@ function bindInstall() {
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
 // ---------- boot ----------
+setTimeout(sheetInstall, 900);
 (async function boot() {
   if (!token) return showAuth('in');
   try { user = (await api('GET', '/me')).user; startApp(); }

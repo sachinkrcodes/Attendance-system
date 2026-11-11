@@ -232,12 +232,55 @@ async function signupRaw(role, name, email, college) {
   r = await call('GET', '/admin/overview', null, ADMIN); assert.ok(r.data.colleges.find((c) => c.name === 'Parul University').teachers >= 1);
   r = await call('GET', '/me', null, T.token); assert.equal(r.data.user.college, 'Parul University'); ok('profile carries the college name');
 
-  // ---- settings, demo, cleanup ----
+  // ---- attendance lock, HOD, announcements, cleanup ----
+  const lockT = await signupRaw('teacher', 'Dr Lock', 'lock@x.edu');
+  { const u = await call('GET', '/admin/users?q=lock@x.edu', null, ADMIN); await call('POST', '/admin/users/' + u.data.items[0].id, { action: 'approve' }, ADMIN); }
+  const lockS = await signupRaw('student', 'Lock Student', 'lockstu@x.edu');
+  r = await call('POST', '/classes', { name: 'Lock Class', code: 'LK1' }, lockT.token); const LK = r.data.class;
+  await call('POST', '/classes/join', { code: LK.joinCode }, lockS.token);
+  const d0 = new Date().toISOString().slice(0, 10), d9 = new Date(Date.now() - 9 * 864e5).toISOString().slice(0, 10);
+  r = await call('PUT', `/classes/${LK.id}/attendance`, { date: d9, records: [{ studentId: lockS.id, status: 'present' }] }, lockT.token); assert.equal(r.status, 403); ok('first entry older than 7 days is refused');
+  r = await call('PUT', `/classes/${LK.id}/attendance`, { date: d0, records: [{ studentId: lockS.id, status: 'present' }] }, lockT.token); assert.equal(r.status, 200);
+  r = await call('GET', `/classes/${LK.id}/roster?date=${d0}`, null, lockT.token); assert.equal(r.data.lock.locked, false); assert.equal(r.data.lock.hours, 24);
+  r = await call('PATCH', '/admin/colleges/' + COLLEGE, { lockHours: 1 }, ADMIN); assert.equal(r.status, 200);
+  r = await call('PATCH', '/admin/colleges/' + COLLEGE, { lockHours: 999 }, ADMIN); assert.equal(r.status, 400);
+  // pretend the first save happened 2 hours ago
+  const { query: q } = require('../lib/db');
+  await q('UPDATE attendance_sessions SET first_saved_at = $1 WHERE class_id = $2', [new Date(Date.now() - 2 * 3600000).toISOString(), LK.id]);
+  r = await call('PUT', `/classes/${LK.id}/attendance`, { date: d0, records: [{ studentId: lockS.id, status: 'absent' }] }, lockT.token); assert.equal(r.status, 403); assert.equal(r.data.locked, true);
+  r = await call('GET', `/classes/${LK.id}/roster?date=${d0}`, null, lockT.token); assert.equal(r.data.lock.locked, true); ok('attendance locks after the college editing window');
+  r = await call('POST', `/classes/${LK.id}/attendance/unlock`, { date: d0, hours: 2 }, lockT.token); assert.equal(r.status, 403); ok('a normal teacher cannot unlock');
+  r = await call('GET', '/admin/users?q=lock@x.edu', null, ADMIN); const lockTid = r.data.items[0].id;
+  r = await call('POST', '/admin/users/' + lockTid, { action: 'hod' }, ADMIN); assert.equal(r.status, 200);
+  r = await call('POST', `/classes/${LK.id}/attendance/unlock`, { date: d0, hours: 2 }, lockT.token); assert.equal(r.status, 200);
+  r = await call('PUT', `/classes/${LK.id}/attendance`, { date: d0, records: [{ studentId: lockS.id, status: 'absent' }] }, lockT.token); assert.equal(r.status, 200); ok('HOD can unlock, then attendance can be edited');
+  r = await call('GET', '/me', null, lockT.token); assert.equal(r.data.user.hod, true);
+  r = await call('GET', '/hod/overview', null, lockT.token); assert.ok(r.data.teachers.length >= 2); assert.ok(r.data.classes.find((c) => c.name === 'Lock Class'));
+  r = await call('GET', '/hod/overview', null, T.token); assert.equal(r.status, 403);
+  const anyTeacher = (await call('GET', '/hod/overview', null, lockT.token)).data.teachers.find((t) => t.email === 'rao@school.edu' || t.name !== 'Dr Lock');
+  r = await call('POST', '/hod/classes', { teacherId: anyTeacher.id, name: 'Assigned by HOD', code: 'H1' }, lockT.token); assert.equal(r.status, 201);
+  r = await call('GET', '/hod/overview', null, lockT.token); const hc = r.data.classes.find((c) => c.name === 'Assigned by HOD'); assert.equal(hc.teacherId, anyTeacher.id);
+  r = await call('POST', `/classes/${hc.id}/timetable`, { day: 2, start: '10:00', end: '11:00', room: 'C-1' }, lockT.token); assert.equal(r.status, 201);
+  r = await call('GET', '/timetable?classId=' + hc.id, null, lockT.token); assert.equal(r.data.items.length, 1); ok('HOD sees all teachers, assigns classes and sets their timetable');
+  r = await call('POST', `/hod/classes/${hc.id}/assign`, { teacherId: lockTid }, lockT.token); assert.equal(r.status, 200);
+  r = await call('POST', '/hod/broadcasts', { title: 'Holiday', body: 'College closed on Friday.' }, lockT.token); assert.equal(r.status, 201);
+  r = await call('POST', '/admin/broadcasts', { title: 'Welcome', body: 'Welcome to Attendly.', collegeId: '' }, ADMIN); assert.equal(r.status, 201);
+  r = await call('GET', '/broadcasts', null, lockS.token); assert.equal(r.data.items.length, 2);
+  r = await call('GET', '/notifications', null, lockS.token); assert.ok(r.data.items.some((i) => i.title.startsWith('Announcement'))); ok('announcements reach students');
+  r = await call('GET', '/admin/activity', null, ADMIN); assert.ok(r.data.items.length > 3); ok('admin activity log');
+  r = await call('POST', '/admin/users/' + lockTid, { action: 'signout' }, ADMIN); r = await call('GET', '/me', null, lockT.token); assert.equal(r.status, 401); ok('admin can sign a user out');
+  const gone = await signupRaw('student', 'Gone Soon', 'gone@x.edu');
+  r = await call('DELETE', '/admin/users/' + gone.id, null, ADMIN); assert.equal(r.status, 409);
+  await call('POST', '/admin/users/' + gone.id, { action: 'disable' }, ADMIN);
+  r = await call('DELETE', '/admin/users/' + gone.id, null, ADMIN); assert.equal(r.status, 200);
+  r = await call('POST', '/auth/login', { email: 'gone@x.edu', password: 'Strong#Pass1' }); assert.equal(r.status, 401); ok('admin deletes a disabled account');
+  r = await call('POST', '/admin/purge-practice', null, ADMIN); assert.equal(r.status, 200);
+  r = await call('GET', '/admin/overview', null, ADMIN); assert.ok(r.data.colleges.every((c) => c.lockHours >= 0)); ok('admin overview shows lock hours and rates');
+
+  // ---- settings, cleanup ----
   r = await call('PATCH', '/me', { threshold: 150 }, T.token); assert.equal(r.status, 400);
   r = await call('PATCH', '/me', { threshold: 60, phone: '+919812345678' }, T.token); assert.equal(r.data.user.threshold, 60); assert.equal(r.data.user.phone, '+919812345678'); ok('profile settings');
-  r = await call('POST', '/demo', null, T2.token); assert.equal(r.status, 201);
-  r = await call('GET', '/dashboard', null, T2.token); assert.equal(r.data.totals.students, 12); assert.ok(r.data.heat.length > 20);
-  r = await call('DELETE', `/classes/${r.data.classes[0].id}`, null, T2.token); assert.equal(r.status, 200); ok('sample class loads and deletes cleanly');
+  r = await call('POST', '/demo', null, T2.token); assert.equal(r.status, 404); ok('practice/demo data no longer exists');
   r = await call('DELETE', `/classes/${C.id}/leave`, null, S[2].token); assert.equal(r.status, 200);
   r = await call('DELETE', `/classes/${C.id}/students/${S[1].id}`, null, T.token); assert.equal(r.status, 200); ok('leave class and remove student');
   r = await call('GET', '/nothing', null, T.token); assert.equal(r.status, 404); ok('unknown route is 404');
