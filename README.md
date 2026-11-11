@@ -145,3 +145,4 @@ Tests: `node test/api.test.js`.
 - Dropdown lists (select) are readable in dark mode.
 - Top bar on tablets hides the name text so nothing overlaps.
 - Checked 620 screens (teacher, student, admin; light and dark; widths 320 to 1280 px) with no sideways overflow and no clipped top bar or dock.
+- v9.1: the service worker now loads CSS/JS from the network first (3 s limit), so new versions appear after one reload.
