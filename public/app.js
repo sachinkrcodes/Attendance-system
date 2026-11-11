@@ -16,7 +16,7 @@ const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, {
 const fmtShort = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 const initials = (n) => String(n || '?').trim().split(/\s+/).map((x) => x[0]).join('').slice(0, 2).toUpperCase();
-const avatar = (name) => `<span class="avatar" aria-hidden="true">${esc(initials(name))}</span>`;
+const avatar = (name, photo) => `<span class="avatar" aria-hidden="true">${photo ? `<img src="${esc(photo)}" alt="" width="72" height="72" loading="lazy" decoding="async">` : esc(initials(name))}</span>`;
 const band = (r, min = 75) => (r === null || r === undefined ? 'none' : r >= min ? 'good' : r >= min - 15 ? 'warn' : 'bad');
 const chip = (r, min) => {
   const b = band(r, min);
@@ -478,7 +478,7 @@ function startApp() {
       <div class="top-right">
         ${user.role === 'admin' ? '' : `<a class="icon-btn" href="#/notifications" aria-label="Notifications">${icon('requests')}</a>`}
         <button class="icon-btn" id="themeBtn" type="button"></button>
-        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name)}<div><b>${esc(user.name)}</b><small>${roleName(user)}${user.college ? ' · ' + esc(user.college) : ''}</small></div></a>
+        <a class="who" href="#/settings" aria-label="Profile">${avatar(user.name, user.photo)}<div><b>${esc(user.name)}</b><small>${roleName(user)}${user.college ? ' · ' + esc(user.college) : ''}</small></div></a>
         <button class="icon-btn" id="outBtn" type="button" aria-label="Sign out">${icon('out')}</button>
       </div>
     </header>
@@ -708,13 +708,14 @@ T.register = async (view, arg) => {
     students.forEach((s) => marks[s.id] && counts[marks[s.id]]++);
     const unmarked = students.filter((s) => !marks[s.id]).length;
     const rows = students.filter((s) => s.name.toLowerCase().includes(q) || (s.rollNo || '').toLowerCase().includes(q)).map((s) => `
-      <div class="reg-row"><div class="row" style="padding:0;background:none">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${s.rollNo ? esc(s.rollNo) + ' · ' : ''}Overall ${s.rate === null ? 'no data' : s.rate + '%'}</small></div></div>
+      <div class="reg-row"><div class="row" style="padding:0;background:none">${avatar(s.name, s.photo)}<div class="grow"><b>${esc(s.name)}</b><small>${s.rollNo ? esc(s.rollNo) + ' · ' : ''}Overall ${s.rate === null ? 'no data' : s.rate + '%'}</small></div></div>
       <div class="seg" role="radiogroup" aria-label="Attendance for ${esc(s.name)}">${STATUS.map(([k, n]) => `<label><input type="radio" name="st-${s.id}" value="${k}" data-sid="${s.id}" ${marks[s.id] === k ? 'checked' : ''} ${lock && lock.locked ? 'disabled' : ''}><span>${sym(k)}${n}</span></label>`).join('')}</div></div>`).join('');
     $('#roster').innerHTML = students.length
       ? `<div class="list" style="margin-top:0">${rows || '<div class="empty"><p>No student matches that search.</p></div>'}</div>`
       : `<div class="glass panel empty"><h3>No students in this class yet</h3><p>Ask students to sign up and enter the join code <b>${esc(cls().joinCode)}</b>.</p></div>`;
     $('#tally').innerHTML = STATUS.map(([k, n]) => `<span><span class="dot ${k}"></span>${n} ${counts[k]}</span>`).join('') + (unmarked ? `<span class="sub">${unmarked} not marked</span>` : '');
     const locked = !!(lock && lock.locked);
+    $('.savebar').classList.toggle('flat', !students.length);
     $('#save').disabled = !students.length || locked;
     $('#allP').disabled = !students.length || locked;
     $('#lockBar').innerHTML = !lock || !lock.hours ? '' : locked
@@ -809,12 +810,57 @@ T.reports = async (view, arg) => {
 };
 
 // ---------- settings (both roles) ----------
+const PROFILE_LABEL = { course: 'Course', semester: 'Semester', division: 'Division', city: 'City', about: 'About me', department: 'Department', designation: 'Designation', qualification: 'Qualification' };
+const PROFILE_UI = {
+  student: ['course', 'semester', 'division', 'city', 'about'],
+  teacher: ['department', 'designation', 'qualification', 'about'],
+  admin: ['designation', 'about'],
+};
+// Shrinks any photo to a 160 px square JPEG (about 6 KB) before it is uploaded.
+function resizePhoto(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) { reject(new Error('Choose a photo (JPG or PNG).')); return; }
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('Could not read that photo.'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('This photo format is not supported. Use a JPG or PNG.'));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height), c = document.createElement('canvas');
+        c.width = c.height = 160;
+        const x = c.getContext('2d'); x.fillStyle = '#F7FAFC'; x.fillRect(0, 0, 160, 160);
+        x.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 160, 160);
+        resolve(c.toDataURL('image/jpeg', 0.72));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+const REGION_MAP = { iad1: 'us-east-1', cle1: 'us-east-2', pdx1: 'us-west-2', sin1: 'ap-southeast-1', bom1: 'ap-south-1', syd1: 'ap-southeast-2', fra1: 'eu-central-1', lhr1: 'eu-west-2', gru1: 'sa-east-1', hnd1: 'ap-northeast-1' };
+const refreshWho = () => { const a = $('.who .avatar'); if (a) a.outerHTML = avatar(user.name, user.photo); };
+async function systemCheck() {
+  const box = $('#sysOut'); box.innerHTML = '<p class="sub">Checking…</p>';
+  try {
+    const t0 = performance.now(); const h = await fetch('/api/health', { cache: 'no-store' }).then((r) => r.json()); const round = Math.round(performance.now() - t0);
+    const near = REGION_MAP[h.serverRegion] === h.databaseRegion;
+    const row = (k, v, good) => `<div class="row"><div class="grow"><b>${k}</b><small>${v}</small></div><span class="chip ${good ? 'good' : 'bad'}">${good ? 'OK' : '<span>Fix</span>'}</span></div>`;
+    box.innerHTML = `<div class="list">
+      ${row('Database speed', `${h.nextQueryMs} ms per query (first ${h.firstQueryMs} ms). Whole check took ${round} ms.`, h.nextQueryMs < 120)}
+      ${row('Server and database are close', `Server: ${esc(h.serverRegion)}. Database: ${esc(h.databaseRegion)}.${near ? '' : ' Move the Vercel function region next to the database (see the guide).'}`, near || h.serverRegion === 'local')}
+      ${row('Admin email set', h.adminEmailsSet ? h.adminEmailsSet + ' admin email(s) configured.' : 'ADMIN_EMAILS is empty.', h.adminEmailsSet > 0)}
+      ${row('Email sending', h.mailConfigured ? 'Gmail sender is configured.' : 'SMTP_USER / SMTP_PASS missing.', h.mailConfigured)}
+      ${row('Demo OTP mode', h.otpDemoMode ? 'SHOW_OTP is on. Delete it in Vercel.' : 'Off. Codes only go by email.', !h.otpDemoMode)}</div>`;
+  } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+}
+
 async function settingsPage(view) {
   const teacher = user.role === 'teacher';
   const student = user.role === 'student';
   const act = await api('GET', '/me/activity').catch(() => ({ items: [] }));
   view.innerHTML = `<div class="page-head"><h1>Profile and settings</h1></div>
-  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name)}<div><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${user.hod ? 'Head of department' : ROLE_NAME[user.role]} account</p></div></div>
+  <section class="glass panel" style="margin-bottom:18px"><div class="profile-card">${avatar(user.name, user.photo)}<div class="grow"><h2 style="font-size:1.5rem">${esc(user.name)}</h2><p class="sub">${user.hod ? 'Head of department' : ROLE_NAME[user.role]} account</p>
+      <div class="actions" style="margin-top:10px"><button class="btn small soft" id="phChange" type="button">${user.photo ? 'Change photo' : 'Add photo'}</button>${user.photo ? '<button class="btn small soft" id="phRemove" type="button">Remove</button>' : ''}<input id="phFile" type="file" accept="image/*" hidden></div></div></div>
     <div class="kv"><div><small>Email</small><b>${esc(user.email)}</b></div><div><small>Mobile</small><b>${esc(user.phone || 'Not added')}</b></div>${!student ? '' : `<div><small>Roll number</small><b>${esc(user.rollNo || 'Not added')}</b></div>`}<div><small>Role</small><b>${user.hod ? 'Head of department' : ROLE_NAME[user.role]}</b></div>${user.role === 'admin' ? '' : `<div><small>College</small><b>${esc(user.college || 'Not set. Ask your admin.')}</b></div>`}</div></section>
   ${installCard(false)}
   <div class="grid cols-2">
@@ -825,6 +871,9 @@ async function settingsPage(view) {
           <div class="row2"><div class="field"><label for="sPhone">Mobile number</label><input id="sPhone" type="tel" maxlength="16" value="${esc(user.phone || '')}"></div>
           ${!student ? '' : `<div class="field"><label for="sRoll">Roll number</label><input id="sRoll" type="text" maxlength="30" value="${esc(user.rollNo || '')}"></div>`}</div>
           ${teacher ? `<div class="field"><label for="sMin">Minimum attendance: <b id="minVal">${user.threshold}%</b></label><input id="sMin" type="range" min="40" max="100" step="5" value="${user.threshold}"><p class="hint">Students below this show up under Needs attention.</p></div>` : ''}
+          ${(PROFILE_UI[user.role] || []).map((k) => k === 'about'
+            ? `<div class="field"><label for="p_${k}">About me</label><textarea id="p_${k}" maxlength="200" placeholder="A line or two about you">${esc((user.profile || {})[k] || '')}</textarea></div>`
+            : `<div class="field"><label for="p_${k}">${PROFILE_LABEL[k]}</label><input id="p_${k}" type="text" maxlength="80" value="${esc((user.profile || {})[k] || '')}"></div>`).join('')}
           <p class="error" id="pfErr" role="alert"></p><button class="btn" type="submit">Save changes</button>
         </form></section>
       <section class="glass panel"><h2>Change password</h2><p class="sub">Your other devices are signed out when you change it.</p>
@@ -835,6 +884,7 @@ async function settingsPage(view) {
       <section class="glass panel"><h2>Recent security activity</h2><p class="sub">If you do not recognise something, change your password and sign out everywhere.</p>
         <div class="list">${act.items.length ? act.items.map((i) => `<div class="row"><div class="grow"><b>${esc(i.action)}</b><small>${fmtWhen(i.at)}${i.ip ? ' · ' + esc(i.ip) : ''}</small></div></div>`).join('') : '<div class="empty"><p>Nothing yet.</p></div>'}</div>
         <div class="actions" style="margin-top:14px"><button class="btn soft" id="all">Sign out of all devices</button></div></section>
+      ${user.role === 'admin' ? '<section class="glass panel"><h2>System check</h2><p class="sub">Tests the database speed and the settings this app needs.</p><div id="sysOut" style="margin-top:12px"></div><div class="actions" style="margin-top:12px"><button class="btn soft" id="sysRun">Run check</button></div></section>' : ''}
       <section class="glass panel"><h2>Appearance</h2><p class="sub">Two colours, light or inverted.</p><div class="actions" style="margin-top:12px"><button class="btn soft" id="th">Switch theme</button></div></section>
       <section class="glass panel"><h2>Session</h2><div class="actions" style="margin-top:12px"><button class="btn soft" id="so">Sign out</button></div></section>
     </div>
@@ -844,7 +894,8 @@ async function settingsPage(view) {
   $('#pf').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const out = await api('PATCH', '/me', { name: $('#sName').value, phone: $('#sPhone').value, ...(m ? { threshold: Number(m.value) } : { rollNo: $('#sRoll').value }) });
+      const profile = Object.fromEntries((PROFILE_UI[user.role] || []).map((k) => [k, $('#p_' + k).value]));
+      const out = await api('PATCH', '/me', { name: $('#sName').value, phone: $('#sPhone').value, profile, ...(m ? { threshold: Number(m.value) } : student ? { rollNo: $('#sRoll').value } : {}) });
       user = out.user; toast('Saved.'); $('.who b').textContent = user.name; $('#pfErr').textContent = '';
     } catch (ex) { $('#pfErr').textContent = ex.message; }
   };
@@ -859,6 +910,15 @@ async function settingsPage(view) {
   $('#all').onclick = () => confirmBox('Sign out of all devices?', 'Every device, including this one, will need the password again.', 'Sign out everywhere', async () => {
     try { await api('POST', '/me/logout-all'); signOut(true); toast('Signed out of all devices.'); } catch (e) { toast(e.message, true); }
   });
+  const sys = $('#sysRun'); if (sys) { sys.onclick = systemCheck; systemCheck(); }
+  const pick = $('#phFile');
+  $('#phChange').onclick = () => pick.click();
+  pick.onchange = async () => {
+    const b = $('#phChange'); b.disabled = true; b.textContent = 'Uploading…';
+    try { const data = await resizePhoto(pick.files[0]); const out = await api('PUT', '/me/photo', { data }); user = out.user; refreshWho(); toast('Photo updated.'); route(); }
+    catch (e) { toast(e.message, true); b.disabled = false; b.textContent = user.photo ? 'Change photo' : 'Add photo'; }
+  };
+  const rmv = $('#phRemove'); if (rmv) rmv.onclick = async () => { try { user = (await api('DELETE', '/me/photo')).user; refreshWho(); toast('Photo removed.'); route(); } catch (e) { toast(e.message, true); } };
   $('#th').onclick = () => $('#themeBtn').click();
   $('#so').onclick = () => signOut();
 }
@@ -1155,10 +1215,11 @@ A.people = async (view) => {
     <div class="field"><label for="fr">Role</label><select id="fr">${opt('', 'Everyone', adminFilter.role)}${opt('teacher', 'Teachers', adminFilter.role)}${opt('student', 'Students', adminFilter.role)}</select></div>
     <div class="field"><label for="fc">College</label><select id="fc">${opt('', 'All colleges', adminFilter.collegeId)}${opt('none', 'No college', adminFilter.collegeId)}${cols.colleges.map((c) => opt(c.id, c.name, adminFilter.collegeId)).join('')}</select></div>
     <div class="field"><label for="fst">Status</label><select id="fst">${opt('', 'Any', adminFilter.status)}${opt('pending', 'Waiting for approval', adminFilter.status)}${opt('disabled', 'Disabled', adminFilter.status)}</select></div></div>
-    ${list.items.length ? `<div class="list">${list.items.map((u) => `<div class="row wrap"><div class="avatar" aria-hidden="true">${esc(initials(u.name))}</div><div class="grow"><b>${esc(u.name)} <span class="kind">${u.hod ? 'HOD' : u.role}</span></b><small>${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.rollNo ? ' · ' + esc(u.rollNo) : ''}</small><small>${esc(u.college || 'No college')}</small></div>
+    ${list.items.length ? `<div class="list">${list.items.map((u) => `<div class="row wrap">${avatar(u.name, u.photo)}<div class="grow"><b>${esc(u.name)} <span class="kind">${u.hod ? 'HOD' : u.role}</span></b><small>${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.rollNo ? ' · ' + esc(u.rollNo) : ''}</small><small>${esc(u.college || 'No college')}</small></div>
       ${u.disabled ? '<span class="chip none">Disabled</span>' : u.role === 'teacher' && !u.approved ? '<span class="chip warn">Waiting</span>' : '<span class="chip good">Active</span>'}
       ${u.role === 'teacher' && !u.approved && !u.disabled ? `<button class="btn small" data-act="approve" data-id="${u.id}">Approve</button>` : ''}
       ${u.role === 'teacher' && u.approved && !u.disabled && u.collegeId ? `<button class="btn small soft" data-act="${u.hod ? 'unhod' : 'hod'}" data-id="${u.id}">${u.hod ? 'Remove HOD' : 'Make HOD'}</button>` : ''}
+      <button class="btn small soft" data-view="${u.id}">Details</button>
       <button class="btn small soft" data-assign="${u.id}">College</button>
       <button class="btn small soft" data-act="signout" data-id="${u.id}">Sign out</button>
       <button class="btn small soft" data-act="${u.disabled ? 'enable' : 'disable'}" data-id="${u.id}">${u.disabled ? 'Enable' : 'Disable'}</button>
@@ -1167,6 +1228,14 @@ A.people = async (view) => {
   $('#fr').onchange = set('role'); $('#fc').onchange = set('collegeId'); $('#fst').onchange = set('status');
   let t; $('#fs').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { adminFilter.q = e.target.value; route(); }, 400); };
   $$('[data-act]', view).forEach((b) => (b.onclick = async () => { try { await api('POST', '/admin/users/' + b.dataset.id, { action: b.dataset.act }); toast('Done.'); route(); } catch (e) { toast(e.message, true); } }));
+  $$('[data-view]', view).forEach((b) => (b.onclick = () => {
+    const u = list.items.find((x) => x.id === b.dataset.view); if (!u) return;
+    const f = (k, v) => (v ? `<div><small>${k}</small><b>${esc(v)}</b></div>` : '');
+    openModal(`<div class="profile-card">${avatar(u.name, u.photo)}<div><h2 style="font-size:1.35rem">${esc(u.name)}</h2><p class="sub">${u.hod ? 'Head of department' : ROLE_NAME[u.role]}</p></div></div>
+      <div class="kv" style="margin-top:14px">${f('Email', u.email)}${f('Mobile', u.phone)}${f('Roll number', u.rollNo)}${f('College', u.college)}${Object.entries(u.profile || {}).filter(([k]) => k !== 'about').map(([k, v]) => f(PROFILE_LABEL[k] || k, v)).join('')}${f('Joined', fmtWhen(u.at))}</div>
+      ${u.profile && u.profile.about ? `<p class="sub" style="margin-top:12px">${esc(u.profile.about)}</p>` : ''}
+      <div class="actions"><button class="btn soft" data-cancel>Close</button></div>`);
+  }));
   $$('[data-rm]', view).forEach((b) => (b.onclick = () => confirmBox('Delete ' + b.dataset.nm + '?', 'Their account and all their records are removed for good.', 'Delete account', async () => { try { await api('DELETE', '/admin/users/' + b.dataset.rm); toast('Account deleted.'); route(); } catch (e) { toast(e.message, true); } })));
   const csv = $('#csv'); if (csv) csv.onclick = () => {
     const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
@@ -1216,7 +1285,7 @@ T.department = async (view) => {
   const teacherOpts = (sel) => d.teachers.map((t) => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
   view.innerHTML = `<div class="page-head row"><div><h1>Department</h1><p>${esc(d.college)} · attendance can be edited for ${d.lockHours ? d.lockHours + ' hours' : 'any time'} after the first save.</p></div>
     <div class="actions"><button class="btn soft" id="ann">Announce</button><button class="btn" id="add">Add a class</button></div></div>
-  <section class="glass panel"><h2>Teachers</h2><div class="list">${d.teachers.map((t) => `<div class="row wrap">${avatar(t.name)}<div class="grow"><b>${esc(t.name)}${t.hod ? ' <span class="kind">HOD</span>' : ''}</b><small>${esc(t.email)}${t.phone ? ' · ' + esc(t.phone) : ''}</small></div><span class="sub">${t.classes} class${t.classes === 1 ? '' : 'es'}</span></div>`).join('') || '<div class="empty"><p>No approved teachers yet.</p></div>'}</div></section>
+  <section class="glass panel"><h2>Teachers</h2><div class="list">${d.teachers.map((t) => `<div class="row wrap">${avatar(t.name, t.photo)}<div class="grow"><b>${esc(t.name)}${t.hod ? ' <span class="kind">HOD</span>' : ''}</b><small>${esc(t.email)}${t.phone ? ' · ' + esc(t.phone) : ''}</small></div><span class="sub">${t.classes} class${t.classes === 1 ? '' : 'es'}</span></div>`).join('') || '<div class="empty"><p>No approved teachers yet.</p></div>'}</div></section>
   <h2 class="section-title">All classes</h2>
   <section class="glass panel">${d.classes.length ? `<div class="list" style="margin-top:0">${d.classes.map((c) => `<div class="row wrap"><div class="mini">${esc(c.emoji || '📘')}</div><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.teacher)} · ${c.students} student${c.students === 1 ? '' : 's'}</small></div>${chip(c.rate, 75)}
     <button class="btn small soft" data-tt="${c.id}">Timetable</button><button class="btn small soft" data-as="${c.id}">Reassign</button><button class="btn small soft" data-ul="${c.id}">Unlock</button></div>`).join('')}</div>` : '<div class="empty"><h3>No classes yet</h3><p>Add a class and choose its teacher.</p></div>'}</section>`;

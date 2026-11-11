@@ -42,6 +42,12 @@ module.exports = async function handler(req, res) {
       ip,
     });
     res.statusCode = out.status || 200;
+    if (out.raw) {
+      res.setHeader('Content-Type', out.type || 'application/octet-stream');
+      for (const [k, v] of Object.entries(out.headers || {})) res.setHeader(k, v);
+      res.end(out.raw);
+      return;
+    }
     res.end(JSON.stringify(out.body));
   } catch (e) {
     const known = e instanceof HttpError;

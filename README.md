@@ -132,3 +132,10 @@ Tests: `node test/api.test.js`.
 - All demo/sample/practice features removed. Install prompt appears on first visit.
 - Set `ADMIN_EMAILS` in Vercel to your email; delete `SHOW_OTP`.
 - **Slow network**: top loading bar, 'Slow connection' message after 2.5 s, 25 s timeout, automatic retry for reads, offline banner, saved data shown when the network drops.
+
+## v8
+- **Speed**: database setup now runs once per version (it used to run ~50 steps on every cold start). Extra indexes for big colleges. Register and student pages load their data in parallel.
+- **Profiles**: profile photo for everyone (shrunk to 160 px, served with long cache), extra fields per role (student: course, semester, division, city; teacher: department, designation, qualification; admin: designation), photos in the register, People and Department lists, People → Details.
+- **Admin Settings → System check**: database speed, server/database region, ADMIN_EMAILS, mail, demo-OTP flag. `/api/health` shows the same.
+- Phone: solid top bar/dock/save bar, calmer save bar, install sheet sits above the dock.
+- Scale: see the note in the chat. Free plans are not enough for 1.5 lakh users; Neon region should match the Vercel function region.

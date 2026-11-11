@@ -277,6 +277,18 @@ async function signupRaw(role, name, email, college) {
   r = await call('POST', '/admin/purge-practice', null, ADMIN); assert.equal(r.status, 200);
   r = await call('GET', '/admin/overview', null, ADMIN); assert.ok(r.data.colleges.every((c) => c.lockHours >= 0)); ok('admin overview shows lock hours and rates');
 
+  // ---- profile photo and profile fields ----
+  const jpg = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(400, 7), Buffer.from([0xff, 0xd9])]).toString('base64');
+  r = await call('PUT', '/me/photo', { data: 'data:image/png;base64,AAAA' }, T.token); assert.equal(r.status, 400);
+  r = await call('PUT', '/me/photo', { data: jpg }, T.token); assert.equal(r.status, 200); assert.ok(r.data.user.photo.startsWith('/api/photo/'));
+  const pr = await fetch(new URL(base).origin + r.data.user.photo); assert.equal(pr.status, 200, r.data.user.photo + ' ' + await pr.clone().text()); assert.equal(pr.headers.get('content-type'), 'image/jpeg'); assert.match(pr.headers.get('cache-control'), /immutable/);
+  r = await call('GET', '/me', null, T.token); assert.ok(r.data.user.photo);
+  r = await call('DELETE', '/me/photo', null, T.token); assert.equal(r.data.user.photo, ''); assert.equal((await fetch(base + '/photo/' + T.id)).status, 404); ok('profile photo upload, serve, remove');
+  r = await call('PATCH', '/me', { profile: { department: 'Computer Science', designation: 'Professor', bogus: 'x' } }, T.token);
+  assert.equal(r.data.user.profile.department, 'Computer Science'); assert.equal(r.data.user.profile.bogus, undefined);
+  r = await call('PATCH', '/me', { profile: { course: 'MCA', semester: '1', division: 'C' } }, S[0].token); assert.equal(r.data.user.profile.course, 'MCA');
+  r = await call('GET', '/health'); assert.equal(r.data.ok, true); assert.equal(typeof r.data.adminEmailsSet, 'number'); ok('profile fields per role and health check');
+
   // ---- settings, cleanup ----
   r = await call('PATCH', '/me', { threshold: 150 }, T.token); assert.equal(r.status, 400);
   r = await call('PATCH', '/me', { threshold: 60, phone: '+919812345678' }, T.token); assert.equal(r.data.user.threshold, 60); assert.equal(r.data.user.phone, '+919812345678'); ok('profile settings');
