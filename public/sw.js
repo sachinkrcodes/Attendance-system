@@ -1,7 +1,7 @@
 'use strict';
 // Attendly service worker: keeps the app shell so it opens fast and works offline.
 // Data always comes from the network (the API is never cached).
-const VERSION = 'attendly-v8';
+const VERSION = 'attendly-v9';
 const SHELL = ['/', '/style.css', '/app.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

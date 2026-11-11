@@ -139,3 +139,9 @@ Tests: `node test/api.test.js`.
 - **Admin Settings → System check**: database speed, server/database region, ADMIN_EMAILS, mail, demo-OTP flag. `/api/health` shows the same.
 - Phone: solid top bar/dock/save bar, calmer save bar, install sheet sits above the dock.
 - Scale: see the note in the chat. Free plans are not enough for 1.5 lakh users; Neon region should match the Vercel function region.
+
+## v9
+- Fixed pages becoming wider than the phone screen (long emails and names pushed the layout). All grids use `minmax(0,1fr)`, long text wraps, and the page cannot scroll sideways.
+- Dropdown lists (select) are readable in dark mode.
+- Top bar on tablets hides the name text so nothing overlaps.
+- Checked 620 screens (teacher, student, admin; light and dark; widths 320 to 1280 px) with no sideways overflow and no clipped top bar or dock.
