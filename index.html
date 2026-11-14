@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1020">
+  <title>Attendly — Attendance Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<section id="authScreen" class="auth-screen">
+  <div class="auth-brand">
+    <div class="mark">A</div>
+    <div><strong>Attendly</strong><span>Attendance management</span></div>
+  </div>
+  <div class="auth-layout">
+    <div class="auth-copy">
+      <span class="eyebrow light">SMART CLASSROOM MANAGEMENT</span>
+      <h1>Attendance that feels<br><em>effortless.</em></h1>
+      <p>One clean workspace for teachers, students, classes, reports and attendance insights.</p>
+      <div class="auth-points">
+        <div><b>✓</b><span><strong>Fast daily registers</strong><small>Mark an entire class in seconds.</small></span></div>
+        <div><b>◌</b><span><strong>Clear attendance insights</strong><small>See trends before they become problems.</small></span></div>
+        <div><b>⌁</b><span><strong>Built for real classrooms</strong><small>Simple enough for every teacher.</small></span></div>
+      </div>
+    </div>
+    <div class="login-card">
+      <div class="login-tabs">
+        <button class="login-tab active" data-role="teacher">Teacher</button>
+        <button class="login-tab" data-role="student">Student</button>
+      </div>
+      <div class="login-title"><span class="eyebrow">WELCOME BACK</span><h2 id="loginHeading">Sign in as a teacher</h2><p id="loginSub">Manage classes, attendance and reports.</p></div>
+      <form id="loginForm">
+        <label>Email address<input id="loginEmail" type="email" placeholder="teacher@school.com" required></label>
+        <label>Password<div class="password-field"><input id="loginPassword" type="password" placeholder="••••••••" required><button type="button" id="togglePassword">Show</button></div></label>
+        <div class="login-row"><label class="remember"><input type="checkbox" id="remember"> <span>Remember me</span></label><button type="button" class="link-btn" id="forgotBtn">Forgot password?</button></div>
+        <button class="login-btn">Sign in <span>→</span></button>
+      </form>
+      <div class="demo-hint" id="demoHint">Demo teacher: <b>teacher@attendly.com</b> / <b>teacher123</b></div>
+      <div class="auth-footer">New to Attendly? <button class="link-btn" id="demoFill">Use demo account</button></div>
+    </div>
+  </div>
+  <div class="auth-credit">© 2026 Attendly · Crafted for modern classrooms</div>
+</section>
+
+<!-- APP -->
+<div id="app" class="app hidden">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand"><div class="mark">A</div><div><strong>Attendly</strong><small>Attendance management</small></div></div>
+
+    <div class="school-switch">
+      <span class="eyebrow">WORKSPACE</span>
+      <button><span class="school-avatar">AC</span><span><b id="schoolNameSide">Apex College</b><small>Computer Science</small></span><i>⌄</i></button>
+    </div>
+
+    <nav class="nav" id="teacherNav">
+      <span class="nav-caption">MAIN MENU</span>
+      <button class="nav-link active" data-page="dashboard"><span class="nav-icon">⌂</span>Dashboard</button>
+      <button class="nav-link" data-page="attendance"><span class="nav-icon">✓</span>Attendance</button>
+      <button class="nav-link" data-page="students"><span class="nav-icon">♙</span>Students</button>
+      <button class="nav-link" data-page="classes"><span class="nav-icon">▦</span>Classes</button>
+      <button class="nav-link" data-page="analytics"><span class="nav-icon">◌</span>Analytics</button>
+      <span class="nav-caption space-top">MANAGE</span>
+      <button class="nav-link" data-page="reports"><span class="nav-icon">▤</span>Reports</button>
+      <button class="nav-link" data-page="settings"><span class="nav-icon">⚙</span>Settings</button>
+    </nav>
+
+    <nav class="nav student-nav hidden" id="studentNav">
+      <span class="nav-caption">STUDENT PORTAL</span>
+      <button class="nav-link active" data-page="studentHome"><span class="nav-icon">⌂</span>My overview</button>
+      <button class="nav-link" data-page="myAttendance"><span class="nav-icon">✓</span>My attendance</button>
+      <button class="nav-link" data-page="mySchedule"><span class="nav-icon">▦</span>My classes</button>
+    </nav>
+
+    <div class="side-bottom">
+      <div class="sync"><span></span><div><b>All changes saved</b><small>On this device</small></div></div>
+      <button class="account" id="accountBtn"><span class="user-avatar" id="sideAvatar">AD</span><span><b id="sideUser">Admin</b><small id="sideRole">Teacher</small></span><i>•••</i></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="top-left"><button class="mobile-menu" id="mobileMenu">☰</button><div><span class="crumb">Attendly / <b id="crumb">Dashboard</b></span><h1 id="pageTitle">Good morning, Admin</h1></div></div>
+      <div class="top-right"><button class="top-icon">◔<i></i></button><button class="help-btn">?</button><button class="profile-mini" id="profileTop"><span id="topAvatar">AD</span><b id="topUser">Admin</b><small id="topRole">Teacher</small></button></div>
+    </header>
+
+    <!-- TEACHER DASHBOARD -->
+    <section class="page" id="dashboardPage">
+      <div class="welcome-banner">
+        <div><span class="eyebrow light">WEDNESDAY · 26 AUGUST 2026</span><h2>Your classroom, at a glance.</h2><p>Everything important for today's attendance is right here.</p></div>
+        <button class="white-btn" data-page="attendance">Take attendance <span>→</span></button>
+      </div>
+      <div class="stat-grid">
+        <article class="stat"><span class="stat-label">Attendance today</span><strong id="statRate">0%</strong><small id="statRateNote">No register marked</small><div class="stat-symbol purple">✓</div></article>
+        <article class="stat"><span class="stat-label">Present</span><strong id="statPresent">0</strong><small id="statPresentNote">of 0 students</small><div class="stat-symbol green">●</div></article>
+        <article class="stat"><span class="stat-label">Absent</span><strong id="statAbsent">0</strong><small>Needs attention</small><div class="stat-symbol red">!</div></article>
+        <article class="stat"><span class="stat-label">Total students</span><strong id="statStudents">0</strong><small>Across active class</small><div class="stat-symbol blue">♙</div></article>
+      </div>
+      <div class="dash-grid">
+        <section class="panel register-preview">
+          <div class="panel-head"><div><span class="eyebrow">TODAY'S REGISTER</span><h3>Class attendance</h3></div><button class="panel-link" data-page="attendance">Open register →</button></div>
+          <div class="attendance-chart" id="attendanceChart"></div>
+          <div class="chart-legend"><span><i class="p"></i>Present</span><span><i class="a"></i>Absent</span><span><i class="u"></i>Unmarked</span></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><span class="eyebrow">SHORTCUTS</span><h3>Quick actions</h3></div></div>
+          <div class="shortcuts">
+            <button data-page="attendance"><b>✓</b><strong>Take attendance</strong><small>Today's class register</small></button>
+            <button id="dashAddStudent"><b>＋</b><strong>Add student</strong><small>Update your roster</small></button>
+            <button data-page="analytics"><b>◌</b><strong>View analytics</strong><small>Attendance trends</small></button>
+            <button id="dashExport"><b>↓</b><strong>Export report</strong><small>Download CSV</small></button>
+          </div>
+        </section>
+        <section class="panel recent">
+          <div class="panel-head"><div><span class="eyebrow">ACTIVITY</span><h3>Recent attendance</h3></div><button class="panel-link" data-page="reports">View reports →</button></div>
+          <div id="recentList"></div>
+        </section>
+        <section class="panel attention">
+          <div class="attention-icon">✦</div><div><span class="eyebrow">ATTENDANCE INSIGHT</span><h3 id="insightTitle">You're all set.</h3><p id="insightText">Add your students and take today's register to start seeing useful insights here.</p></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ATTENDANCE -->
+    <section class="page hidden" id="attendancePage">
+      <div class="page-heading"><div><span class="eyebrow">DAILY REGISTER</span><h2>Take attendance</h2><p>Mark each student present, absent, or leave them unmarked.</p></div><div class="date-field"><label>Attendance date</label><input type="date" id="attendanceDate"></div></div>
+      <div class="toolbar panel"><div><b id="registerCount">0 students</b><span id="registerMarked">0 marked</span></div><div><button class="outline-btn" id="allPresent">Mark all present</button><button class="soft-btn" id="clearRegister">Clear</button></div></div>
+      <div class="panel attendance-table" id="attendanceTable"></div>
+      <div class="empty-state panel hidden" id="attendanceEmpty"><div>♙</div><h3>Your class is empty</h3><p>Add students before taking attendance.</p><button class="primary-btn" id="attendanceAdd">＋ Add student</button></div>
+    </section>
+
+    <!-- STUDENTS -->
+    <section class="page hidden" id="studentsPage">
+      <div class="page-heading"><div><span class="eyebrow">CLASS ROSTER</span><h2>Students</h2><p>Keep your roster organised and see attendance at a glance.</p></div><button class="primary-btn" id="addStudentBtn">＋ Add student</button></div>
+      <div class="panel table-panel"><div class="table-toolbar"><div class="search"><span>⌕</span><input id="studentSearch" placeholder="Search students..."></div><span id="studentTotal"></span></div><div class="table-scroll"><table><thead><tr><th>Student</th><th>Roll no.</th><th>Class</th><th>Attendance</th><th>Last status</th><th></th></tr></thead><tbody id="studentsTable"></tbody></table></div><div class="empty-state hidden" id="studentEmpty"><div>⌕</div><h3>No students found</h3><p>Try another search or add a new student.</p></div></div>
+    </section>
+
+    <!-- CLASSES -->
+    <section class="page hidden" id="classesPage">
+      <div class="page-heading"><div><span class="eyebrow">ACADEMIC STRUCTURE</span><h2>Classes</h2><p>Organise students into the classes you teach.</p></div><button class="primary-btn" id="addClassBtn">＋ New class</button></div>
+      <div class="class-grid" id="classGrid"></div>
+    </section>
+
+    <!-- ANALYTICS -->
+    <section class="page hidden" id="analyticsPage">
+      <div class="page-heading"><div><span class="eyebrow">CLASS INSIGHTS</span><h2>Analytics</h2><p>Spot trends and students who may need attention.</p></div><button class="outline-btn" id="analyticsExport">↓ Export CSV</button></div>
+      <div class="analytics-top"><div class="panel big-chart"><div class="panel-head"><div><span class="eyebrow">LAST 7 RECORDED DAYS</span><h3>Attendance trend</h3></div><strong id="averageRate">0%</strong></div><div id="trendChart" class="trend-chart"></div></div><div class="panel"><div class="panel-head"><div><span class="eyebrow">CLASS HEALTH</span><h3>Overview</h3></div></div><div class="health-cards" id="healthCards"></div></div></div>
+      <div class="panel performance"><div class="panel-head"><div><span class="eyebrow">STUDENT PERFORMANCE</span><h3>Attendance by student</h3></div></div><div id="performanceList"></div></div>
+    </section>
+
+    <!-- REPORTS -->
+    <section class="page hidden" id="reportsPage">
+      <div class="page-heading"><div><span class="eyebrow">REPORT CENTRE</span><h2>Reports</h2><p>Export a clean attendance record whenever you need it.</p></div><button class="primary-btn" id="reportExport">↓ Export CSV</button></div>
+      <div class="report-cards"><div class="panel report-intro"><span class="report-icon">▤</span><h3>Attendance report</h3><p>Download the full class register with one column per recorded date.</p><button class="outline-btn" id="reportExport2">Download CSV →</button></div><div class="panel report-intro"><span class="report-icon green-bg">✓</span><h3>Monthly summary</h3><p>Use the analytics page to review performance before exporting.</p><button class="soft-btn" data-page="analytics">Open analytics →</button></div></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page hidden" id="settingsPage">
+      <div class="page-heading"><div><span class="eyebrow">WORKSPACE</span><h2>Settings</h2><p>Personalise the system and manage local demo data.</p></div></div>
+      <div class="settings-list">
+        <div class="setting panel"><div><b>School / workspace name</b><small>Shown throughout the teacher dashboard.</small></div><input id="schoolInput" value="Apex College"></div>
+        <div class="setting panel"><div><b>Teacher display name</b><small>Used in the welcome message and account menu.</small></div><input id="teacherInput" value="Admin"></div>
+        <div class="setting panel"><div><b>Creator credit</b><small>Change the name shown in the app footer.</small></div><input id="creditInput" value="Your Name"></div>
+        <div class="setting panel"><div><b>Demo data</b><small>Load realistic students and attendance so you can explore every screen.</small></div><button class="outline-btn" id="loadDemo">Load demo data</button></div>
+        <div class="setting panel danger-setting"><div><b>Reset local workspace</b><small>Removes students, classes and attendance from this browser.</small></div><button class="danger-btn" id="resetApp">Reset everything</button></div>
+      </div>
+      <div class="footer-credit">Built with care by <b id="footerCredit">Your Name</b> · Attendly</div>
+    </section>
+
+    <!-- STUDENT -->
+    <section class="page hidden" id="studentHomePage">
+      <div class="welcome-banner student-banner"><div><span class="eyebrow light">STUDENT PORTAL</span><h2 id="studentWelcome">Welcome back.</h2><p>Here's how your attendance is looking.</p></div><div class="student-score"><strong id="studentRate">0%</strong><span>overall attendance</span></div></div>
+      <div class="stat-grid student-stats"><article class="stat"><span class="stat-label">Overall attendance</span><strong id="sRate">0%</strong><small>Across recorded classes</small></article><article class="stat"><span class="stat-label">Present</span><strong id="sPresent">0</strong><small>Days attended</small></article><article class="stat"><span class="stat-label">Absent</span><strong id="sAbsent">0</strong><small>Days missed</small></article><article class="stat"><span class="stat-label">Classes</span><strong id="sClasses">0</strong><small>Enrolled classes</small></article></div>
+      <div class="student-content"><div class="panel"><div class="panel-head"><div><span class="eyebrow">ATTENDANCE HISTORY</span><h3>Recent records</h3></div></div><div id="studentRecent"></div></div><div class="panel attendance-note"><div class="report-icon">✦</div><span class="eyebrow">YOUR STATUS</span><h3 id="studentStatusTitle">Looking good</h3><p id="studentStatusText">Keep attending regularly to maintain a strong attendance record.</p></div></div>
+    </section>
+    <section class="page hidden" id="myAttendancePage">
+      <div class="page-heading"><div><span class="eyebrow">PERSONAL RECORD</span><h2>My attendance</h2><p>Your attendance history in this workspace.</p></div></div>
+      <div class="panel personal-list" id="myAttendanceList"></div>
+    </section>
+    <section class="page hidden" id="mySchedulePage">
+      <div class="page-heading"><div><span class="eyebrow">MY CLASSES</span><h2>My classes</h2><p>Classes currently associated with your account.</p></div></div>
+      <div class="class-grid" id="studentClassGrid"></div>
+    </section>
+  </main>
+</div>
+
+<!-- MODAL -->
+<div class="modal hidden" id="modal">
+  <div class="modal-box" id="modalBox"></div>
+</div>
+<div id="toastWrap"></div>
+<script src="script.js"></script>
+</body>
+</html>
